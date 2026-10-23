@@ -36,13 +36,18 @@ const redis = new Redis(REDIS_URL, {
 redis.on('connect', () => console.log('Redis connected successfully to In-Memory Engine'));
 redis.on('error', (err) => console.error('Redis Connection Error:', err));
 
-// Mongoose Schemas for Users & Wallets & Transactions
+// ============================================================================
+// MONGOOSE SCHEMAS (PERMANENT FINANCIAL & USER LEDGER)
+// ============================================================================
+
 const userSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true },
+    uid: { type: String, required: true, unique: true, index: true },
     displayName: String,
     numericId: Number,
     coins: { type: Number, default: 1000 },
     diamonds: { type: Number, default: 0 },
+    totalCoinsSent: { type: Number, default: 0 },
+    totalDiamondsEarned: { type: Number, default: 0 },
     avatarUrl: String,
     updatedAt: { type: Date, default: Date.now },
     createdAt: { type: Date, default: Date.now }
@@ -50,40 +55,95 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 const transactionSchema = new mongoose.Schema({
-    transactionId: { type: String, required: true, unique: true },
-    senderId: { type: String, required: true },
-    receiverId: { type: String, required: true },
+    transactionId: { type: String, required: true, unique: true, index: true },
+    senderId: { type: String, required: true, index: true },
+    senderName: String,
+    senderNumericId: Number,
+    receiverId: String,
+    recipientIds: [String],
+    recipientCount: { type: Number, default: 1 },
     roomId: String,
     giftId: String,
     giftName: String,
     giftCost: { type: Number, required: true },
+    costPerRecipient: { type: Number, default: 0 },
+    diamondsPerRecipient: { type: Number, default: 0 },
     receiverDiamonds: { type: Number, default: 0 },
-    timestamp: { type: Date, default: Date.now }
+    isMulti: { type: Boolean, default: false },
+    timestamp: { type: Date, default: Date.now, index: true }
 });
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
+const rechargeSchema = new mongoose.Schema({
+    rechargeId: { type: String, required: true, unique: true, index: true },
+    uid: { type: String, required: true, index: true },
+    numericId: Number,
+    coinsAdded: { type: Number, required: true },
+    amountInr: { type: Number, required: true },
+    paymentMethod: { type: String, default: "UPI" },
+    paymentRef: String,
+    status: { type: String, default: "SUCCESS" },
+    createdAt: { type: Date, default: Date.now }
+});
+const Recharge = mongoose.model('Recharge', rechargeSchema);
+
+const withdrawSchema = new mongoose.Schema({
+    withdrawId: { type: String, required: true, unique: true, index: true },
+    uid: { type: String, required: true, index: true },
+    numericId: Number,
+    diamondsDeducted: { type: Number, required: true },
+    amountInr: { type: Number, required: true },
+    upiId: String,
+    status: { type: String, default: "PENDING" },
+    screenshotProofUrl: String,
+    createdAt: { type: Date, default: Date.now }
+});
+const WithdrawRecord = mongoose.model('WithdrawRecord', withdrawSchema);
+
 // ============================================================================
-// ATOMIC REDIS LUA SCRIPT (FROM ARCHITECTURE GUIDE PAGE 2)
-// Prevents Double-Spend, Race Conditions, and Negative Balances (0ms Latency)
+// ATOMIC REDIS LUA SCRIPTS
 // ============================================================================
-const LUA_GIFT_SCRIPT = `
+
+// 1. Single-User Atomic Gifting Script
+const LUA_SINGLE_GIFT_SCRIPT = `
   local current_coins = tonumber(redis.call('get', KEYS[1]) or "0")
   local cost = tonumber(ARGV[1])
   if current_coins >= cost then
     redis.call('decrby', KEYS[1], cost)
     redis.call('incrby', KEYS[2], cost)
+    redis.call('incrby', KEYS[3], cost)
     return 1
   else
     return 0
   end
 `;
 
-/**
- * Helper to ensure user keys are initialized in Redis from MongoDB if not cached
- */
+// 2. Super Safe Multi-User (ALL SELECT) Atomic Gifting Script
+const LUA_MULTI_GIFT_SCRIPT = `
+  local current_coins = tonumber(redis.call('get', KEYS[1]) or "0")
+  local total_cost = tonumber(ARGV[1])
+  local reward = tonumber(ARGV[2])
+  local count = tonumber(ARGV[3])
+
+  if current_coins < total_cost then
+    return 0
+  end
+
+  redis.call('decrby', KEYS[1], total_cost)
+  redis.call('incrby', KEYS[2], total_cost)
+
+  for i = 1, count do
+    local recipient_key = KEYS[i + 2]
+    redis.call('incrby', recipient_key, reward)
+  end
+
+  return 1
+`;
+
 async function ensureUserWalletInRedis(uid, initialCoins = 0, initialDiamonds = 0) {
     const senderKey = `user:${uid}:coins`;
     const receiverKey = `user:${uid}:diamonds`;
+    const sentKey = `user:${uid}:total_sent`;
     
     const [cachedCoins, cachedDiamonds] = await Promise.all([
         redis.get(senderKey),
@@ -104,7 +164,8 @@ async function ensureUserWalletInRedis(uid, initialCoins = 0, initialDiamonds = 
         const diamonds = cachedDiamonds !== null ? Number(cachedDiamonds) : user.diamonds;
         await Promise.all([
             redis.set(senderKey, coins),
-            redis.set(receiverKey, diamonds)
+            redis.set(receiverKey, diamonds),
+            redis.setnx(sentKey, user.totalCoinsSent || 0)
         ]);
         return { coins, diamonds };
     }
@@ -112,21 +173,17 @@ async function ensureUserWalletInRedis(uid, initialCoins = 0, initialDiamonds = 
     return { coins: Number(cachedCoins), diamonds: Number(cachedDiamonds) };
 }
 
-/**
- * Core Atomic Gifting Function as Specified in PDF Architecture Guide
- */
 async function sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, giftName = "") {
     const senderKey = `user:${senderId}:coins`;
+    const sentKey = `user:${senderId}:total_sent`;
     const receiverKey = `user:${receiverId}:diamonds`;
 
-    // Ensure both sender and receiver exist in Redis
     await Promise.all([
         ensureUserWalletInRedis(senderId),
         ensureUserWalletInRedis(receiverId)
     ]);
 
-    // Execute Atomic Redis Transaction via Lua script
-    const result = await redis.eval(LUA_GIFT_SCRIPT, 2, senderKey, receiverKey, giftCost);
+    const result = await redis.eval(LUA_SINGLE_GIFT_SCRIPT, 3, senderKey, sentKey, receiverKey, giftCost);
 
     if (result === 0) {
         return { success: false, message: "Insufficient coins! (-326772 preventer: balance strictly protected)" };
@@ -137,7 +194,10 @@ async function sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, gift
         redis.get(receiverKey)
     ]);
 
-    // Instant Broadcast via Socket.IO for Room Animations across all listeners
+    const today = new Date().toISOString().slice(0, 10);
+    redis.zincrby(`leaderboard:daily:rich:${today}`, giftCost, senderId).catch(() => {});
+    redis.zincrby(`leaderboard:daily:charm:${today}`, giftCost, receiverId).catch(() => {});
+
     if (roomId) {
         io.to(roomId).emit("GIFT_RECEIVED", {
             senderId,
@@ -158,7 +218,6 @@ async function sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, gift
         });
     }
 
-    // Async MongoDB Logging in Background (Non-blocking)
     const txId = `TXN_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
     Transaction.create({
         transactionId: txId,
@@ -181,6 +240,97 @@ async function sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, gift
     };
 }
 
+async function sendMultiGiftCore(senderId, recipientIds, giftId, totalCost, costPerRecipient, diamondsPerRecipient, roomId, giftName = "") {
+    if (!recipientIds || recipientIds.length === 0) {
+        return { success: false, message: "No recipients selected" };
+    }
+
+    const cleanRecipients = recipientIds.filter(id => id && id.trim().length > 0);
+    const count = cleanRecipients.length;
+    const finalTotalCost = totalCost || (costPerRecipient * count);
+    const finalDiamonds = diamondsPerRecipient || costPerRecipient;
+
+    await Promise.all([
+        ensureUserWalletInRedis(senderId),
+        ...cleanRecipients.map(id => ensureUserWalletInRedis(id))
+    ]);
+
+    const senderKey = `user:${senderId}:coins`;
+    const sentKey = `user:${senderId}:total_sent`;
+    const recipientKeys = cleanRecipients.map(id => `user:${id}:diamonds`);
+
+    const allKeys = [senderKey, sentKey, ...recipientKeys];
+    const keyCount = allKeys.length;
+
+    const result = await redis.eval(
+        LUA_MULTI_GIFT_SCRIPT,
+        keyCount,
+        ...allKeys,
+        finalTotalCost,
+        finalDiamonds,
+        count
+    );
+
+    if (result === 0) {
+        return { success: false, message: "Insufficient coins! (-326772 preventer: multi-gift aborted)" };
+    }
+
+    const remainingCoins = await redis.get(senderKey);
+
+    const today = new Date().toISOString().slice(0, 10);
+    redis.zincrby(`leaderboard:daily:rich:${today}`, finalTotalCost, senderId).catch(() => {});
+    cleanRecipients.forEach(id => {
+        redis.zincrby(`leaderboard:daily:charm:${today}`, finalDiamonds, id).catch(() => {});
+    });
+
+    if (roomId) {
+        io.to(roomId).emit("GIFT_RECEIVED", {
+            senderId,
+            recipientIds: cleanRecipients,
+            giftId,
+            giftName,
+            totalCost: finalTotalCost,
+            costPerRecipient,
+            diamondsPerRecipient: finalDiamonds,
+            isMulti: true,
+            timestamp: Date.now()
+        });
+
+        io.to(roomId).emit("multi_gift_sent", {
+            fromUid: senderId,
+            toUids: cleanRecipients,
+            giftId,
+            giftName,
+            costCoins: finalTotalCost,
+            timestamp: Date.now()
+        });
+    }
+
+    const txId = `TXN_MULTI_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    Transaction.create({
+        transactionId: txId,
+        senderId,
+        recipientIds: cleanRecipients,
+        recipientCount: count,
+        roomId: roomId || "",
+        giftId: giftId || "gift_multi",
+        giftName: giftName || giftId,
+        giftCost: finalTotalCost,
+        costPerRecipient,
+        diamondsPerRecipient: finalDiamonds,
+        isMulti: true,
+        timestamp: new Date()
+    }).catch(err => console.error("Async MongoDB Multi Log Error:", err));
+
+    return {
+        success: true,
+        message: "Multi-gift sent successfully!",
+        remainingCoins: Number(remainingCoins),
+        recipientCount: count,
+        transactionId: txId
+    };
+}
+
 // ============================================================================
 // REST API ENDPOINTS
 // ============================================================================
@@ -188,8 +338,9 @@ async function sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, gift
 app.get('/', (req, res) => {
     res.json({
         status: 'Amison High-Speed Transaction Engine is Running',
-        version: '2.0.0',
-        techStack: 'Node.js + Redis Lua + MongoDB + Socket.IO',
+        version: '2.1.0',
+        techStack: 'Node.js + Multi-User Redis Lua + MongoDB + Socket.IO',
+        features: ['single_gifting', 'multi_user_all_select_gifting', 'recharge_ledger', 'realtime_leaderboard'],
         timestamp: new Date()
     });
 });
@@ -198,7 +349,6 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', redis: redis.status, mongo: mongoose.connection.readyState });
 });
 
-// Sync User Profile and Wallet between Firebase/Android & Redis/Mongo
 app.post('/api/user/sync', async (req, res) => {
     try {
         const { uid, displayName, numericId, avatarUrl, coins, diamonds } = req.body;
@@ -222,7 +372,6 @@ app.post('/api/user/sync', async (req, res) => {
             await user.save();
         }
 
-        // Cache in Redis for instant 0ms access
         await Promise.all([
             redis.set(`user:${uid}:coins`, user.coins),
             redis.set(`user:${uid}:diamonds`, user.diamonds)
@@ -234,7 +383,6 @@ app.post('/api/user/sync', async (req, res) => {
     }
 });
 
-// Fetch Live Wallet Balance directly from Redis (0ms Latency)
 app.get('/api/wallet/:uid', async (req, res) => {
     try {
         const { uid } = req.params;
@@ -245,7 +393,6 @@ app.get('/api/wallet/:uid', async (req, res) => {
     }
 });
 
-// High-Speed REST API for Gifting (Http Option for Android Client)
 app.post('/api/gift/send', async (req, res) => {
     try {
         const { senderId, receiverId, giftId, giftCost, roomId, giftName } = req.body;
@@ -263,12 +410,121 @@ app.post('/api/gift/send', async (req, res) => {
     }
 });
 
+app.post('/api/gift/send-multi', async (req, res) => {
+    try {
+        const { senderId, recipientIds, giftId, totalCost, costPerRecipient, diamondsPerRecipient, roomId, giftName } = req.body;
+        if (!senderId || !recipientIds || !Array.isArray(recipientIds) || recipientIds.length === 0) {
+            return res.status(400).json({ success: false, message: "Invalid multi-recipient parameters" });
+        }
+
+        const result = await sendMultiGiftCore(
+            senderId,
+            recipientIds,
+            giftId,
+            totalCost,
+            costPerRecipient,
+            diamondsPerRecipient,
+            roomId,
+            giftName
+        );
+
+        if (!result.success) {
+            return res.status(400).json(result);
+        }
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ success: false, message: "Multi-Gift Error", error: e.message });
+    }
+});
+
+app.get('/api/leaderboard/daily/rich', async (req, res) => {
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        const top = await redis.zrevrange(`leaderboard:daily:rich:${today}`, 0, 49, 'WITHSCORES');
+        const results = [];
+        for (let i = 0; i < top.length; i += 2) {
+            results.push({ uid: top[i], score: Number(top[i + 1]), rank: (i / 2) + 1 });
+        }
+        res.json({ success: true, date: today, leaderboard: results });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/leaderboard/daily/charm', async (req, res) => {
+    try {
+        const today = new Date().toISOString().slice(0, 10);
+        const top = await redis.zrevrange(`leaderboard:daily:charm:${today}`, 0, 49, 'WITHSCORES');
+        const results = [];
+        for (let i = 0; i < top.length; i += 2) {
+            results.push({ uid: top[i], score: Number(top[i + 1]), rank: (i / 2) + 1 });
+        }
+        res.json({ success: true, date: today, leaderboard: results });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/recharge/create', async (req, res) => {
+    try {
+        const { uid, numericId, coinsAdded, amountInr, paymentMethod, paymentRef } = req.body;
+        if (!uid || !coinsAdded || coinsAdded <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid recharge parameters" });
+        }
+        await ensureUserWalletInRedis(uid);
+        const newCoins = await redis.incrby(`user:${uid}:coins`, coinsAdded);
+        const rchId = `RCH_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const recharge = await Recharge.create({
+            rechargeId: rchId,
+            uid,
+            numericId: numericId || 0,
+            coinsAdded,
+            amountInr: amountInr || 0,
+            paymentMethod: paymentMethod || "UPI",
+            paymentRef: paymentRef || "",
+            status: "SUCCESS"
+        });
+        await User.updateOne({ uid }, { $inc: { coins: coinsAdded, rechargeTotalInr: amountInr || 0 } }, { upsert: true });
+        res.json({ success: true, rechargeId: rchId, remainingCoins: Number(newCoins), recharge });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/withdraw/create', async (req, res) => {
+    try {
+        const { uid, numericId, diamondsDeducted, amountInr, upiId, screenshotProofUrl } = req.body;
+        if (!uid || !diamondsDeducted || diamondsDeducted <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid withdraw parameters" });
+        }
+        await ensureUserWalletInRedis(uid);
+        const currentDiamonds = Number(await redis.get(`user:${uid}:diamonds`) || 0);
+        if (currentDiamonds < diamondsDeducted) {
+            return res.status(400).json({ success: false, message: "Insufficient diamonds balance" });
+        }
+        const newDiamonds = await redis.decrby(`user:${uid}:diamonds`, diamondsDeducted);
+        const wdrId = `WDR_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const withdraw = await WithdrawRecord.create({
+            withdrawId: wdrId,
+            uid,
+            numericId: numericId || 0,
+            diamondsDeducted,
+            amountInr: amountInr || 0,
+            upiId: upiId || "",
+            status: "PENDING",
+            screenshotProofUrl: screenshotProofUrl || ""
+        });
+        res.json({ success: true, withdrawId: wdrId, remainingDiamonds: Number(newDiamonds), withdraw });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
 // ============================================================================
 // SOCKET.IO REAL-TIME EVENTS
 // ============================================================================
 
 io.on('connection', (socket) => {
-    // Room Join & Leave
     socket.on('join_room', ({ roomId, uid }) => {
         if (!roomId) return;
         socket.join(roomId);
@@ -281,78 +537,9 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('user_left', { uid, timestamp: Date.now() });
     });
 
-    // Mic Seat Lock / Claim (Atomic Redis Lock)
     socket.on('claim_seat', async ({ roomId, seatIndex, uid }, callback) => {
         const lockKey = `room:${roomId}:seat:${seatIndex}`;
         try {
             const acquired = await redis.set(lockKey, uid, 'NX', 'EX', 7200);
             if (acquired === 'OK') {
-                if (callback) callback({ success: true, message: 'Seat locked successfully' });
-                io.to(roomId).emit('seat_updated', { seatIndex, uid, status: 'locked' });
-            } else {
-                const currentHolder = await redis.get(lockKey);
-                if (callback) callback({ success: false, message: 'Seat already occupied', holder: currentHolder });
-            }
-        } catch (e) {
-            if (callback) callback({ success: false, error: e.message });
-        }
-    });
-
-    // Mic Seat Release
-    socket.on('release_seat', async ({ roomId, seatIndex, uid }) => {
-        const lockKey = `room:${roomId}:seat:${seatIndex}`;
-        const holder = await redis.get(lockKey);
-        if (holder === uid) {
-            await redis.del(lockKey);
-            io.to(roomId).emit('seat_updated', { seatIndex, uid: null, status: 'empty' });
-        }
-    });
-
-    // Real-time Gifting through Socket.IO (Direct from PDF)
-    socket.on('send_gift', async ({ senderId, receiverId, giftId, giftCost, roomId, giftName }, callback) => {
-        try {
-            const result = await sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, giftName);
-            if (callback) callback(result);
-        } catch (e) {
-            if (callback) callback({ success: false, message: "Server Transaction Error", error: e.message });
-        }
-    });
-
-    socket.on('disconnect', () => {
-        // Handled cleanly
-    });
-});
-
-// ============================================================================
-// PERIODIC QUEUE BACKUP (Redis In-Memory -> MongoDB Persistent Storage)
-// Runs every 60 seconds to sync cached balances safely into MongoDB
-// ============================================================================
-setInterval(async () => {
-    try {
-        const keys = await redis.keys('user:*:coins');
-        if (!keys || keys.length === 0) return;
-
-        for (const key of keys) {
-            const match = key.match(/^user:(.+):coins$/);
-            if (match && match[1]) {
-                const uid = match[1];
-                const coinsStr = await redis.get(key);
-                const diamondsStr = await redis.get(`user:${uid}:diamonds`);
-                const coins = Number(coinsStr || 0);
-                const diamonds = Number(diamondsStr || 0);
-
-                await User.updateOne(
-                    { uid },
-                    { $set: { coins, diamonds, updatedAt: new Date() } },
-                    { upsert: true }
-                );
-            }
-        }
-    } catch (err) {
-        console.error("Periodic Redis to MongoDB sync error:", err.message);
-    }
-}, 60000);
-
-server.listen(PORT, () => {
-    console.log(`Amison Production Backend Engine running on port ${PORT}`);
-});
+                if (callback) callback({ success: true, message: 'Seat locked succes
