@@ -1,0 +1,20 @@
+{
+  "name": "amison-backend",
+  "version": "1.0.0",
+  "description": "High concurrency backend for Amison Voice Chat App with MongoDB and Upstash Redis",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5",
+    "mongoose": "^8.3.1",
+    "ioredis": "^5.3.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
