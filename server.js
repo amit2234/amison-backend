@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const Redis = require('ioredis');
 const cors = require('cors');
+const crypto = require('crypto');
 
 const app = express();
 app.use(cors());
@@ -21,6 +22,8 @@ const io = new Server(server, {
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://diablo:Diablo2234@amison.bgzqeqm.mongodb.net/amison_db?retryWrites=true&w=majority";
 const REDIS_URL = process.env.REDIS_URL || "redis://default:gQAAAAAAA56XAAIgcDI0MWNhYzRkZTc4NDU0Yjg5OWFjMDhiNGMyMGZhNzMyNA@vital-rooster-237207.upstash.io:6379";
+const ZEGO_APP_ID = process.env.ZEGO_APP_ID ? Number(process.env.ZEGO_APP_ID) : 123456789;
+const ZEGO_SERVER_SECRET = process.env.ZEGO_SERVER_SECRET || "0123456789abcdef0123456789abcdef";
 
 // Connect MongoDB Atlas
 mongoose.connect(MONGO_URI)
@@ -41,7 +44,7 @@ redis.on('error', (err) => console.error('Redis Connection Error:', err));
 // ============================================================================
 
 const userSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true, index: true },
+    uid: { type: String, required: true, unique: true },
     displayName: String,
     numericId: Number,
     coins: { type: Number, default: 1000 },
@@ -55,8 +58,8 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 const transactionSchema = new mongoose.Schema({
-    transactionId: { type: String, required: true, unique: true, index: true },
-    senderId: { type: String, required: true, index: true },
+    transactionId: { type: String, required: true, unique: true },
+    senderId: { type: String, required: true },
     senderName: String,
     senderNumericId: Number,
     receiverId: String,
@@ -70,13 +73,13 @@ const transactionSchema = new mongoose.Schema({
     diamondsPerRecipient: { type: Number, default: 0 },
     receiverDiamonds: { type: Number, default: 0 },
     isMulti: { type: Boolean, default: false },
-    timestamp: { type: Date, default: Date.now, index: true }
+    timestamp: { type: Date, default: Date.now }
 });
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
 const rechargeSchema = new mongoose.Schema({
-    rechargeId: { type: String, required: true, unique: true, index: true },
-    uid: { type: String, required: true, index: true },
+    rechargeId: { type: String, required: true, unique: true },
+    uid: { type: String, required: true },
     numericId: Number,
     coinsAdded: { type: Number, required: true },
     amountInr: { type: Number, required: true },
@@ -88,8 +91,8 @@ const rechargeSchema = new mongoose.Schema({
 const Recharge = mongoose.model('Recharge', rechargeSchema);
 
 const withdrawSchema = new mongoose.Schema({
-    withdrawId: { type: String, required: true, unique: true, index: true },
-    uid: { type: String, required: true, index: true },
+    withdrawId: { type: String, required: true, unique: true },
+    uid: { type: String, required: true },
     numericId: Number,
     diamondsDeducted: { type: Number, required: true },
     amountInr: { type: Number, required: true },
@@ -101,10 +104,9 @@ const withdrawSchema = new mongoose.Schema({
 const WithdrawRecord = mongoose.model('WithdrawRecord', withdrawSchema);
 
 // ============================================================================
-// ATOMIC REDIS LUA SCRIPTS
+// ATOMIC REDIS LUA SCRIPTS (0ms CONCURRENCY)
 // ============================================================================
 
-// 1. Single-User Atomic Gifting Script
 const LUA_SINGLE_GIFT_SCRIPT = `
   local current_coins = tonumber(redis.call('get', KEYS[1]) or "0")
   local cost = tonumber(ARGV[1])
@@ -118,7 +120,6 @@ const LUA_SINGLE_GIFT_SCRIPT = `
   end
 `;
 
-// 2. Super Safe Multi-User (ALL SELECT) Atomic Gifting Script
 const LUA_MULTI_GIFT_SCRIPT = `
   local current_coins = tonumber(redis.call('get', KEYS[1]) or "0")
   local total_cost = tonumber(ARGV[1])
@@ -186,7 +187,7 @@ async function sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, gift
     const result = await redis.eval(LUA_SINGLE_GIFT_SCRIPT, 3, senderKey, sentKey, receiverKey, giftCost);
 
     if (result === 0) {
-        return { success: false, message: "Insufficient coins! (-326772 preventer: balance strictly protected)" };
+        return { success: false, message: "Insufficient coins! Balance strictly protected." };
     }
 
     const [remainingCoins, newDiamonds] = await Promise.all([
@@ -205,15 +206,6 @@ async function sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, gift
             giftId,
             giftName,
             cost: giftCost,
-            timestamp: Date.now()
-        });
-
-        io.to(roomId).emit("gift_sent", {
-            fromUid: senderId,
-            toUid: receiverId,
-            giftId,
-            giftName,
-            costCoins: giftCost,
             timestamp: Date.now()
         });
     }
@@ -258,13 +250,11 @@ async function sendMultiGiftCore(senderId, recipientIds, giftId, totalCost, cost
     const senderKey = `user:${senderId}:coins`;
     const sentKey = `user:${senderId}:total_sent`;
     const recipientKeys = cleanRecipients.map(id => `user:${id}:diamonds`);
-
     const allKeys = [senderKey, sentKey, ...recipientKeys];
-    const keyCount = allKeys.length;
 
     const result = await redis.eval(
         LUA_MULTI_GIFT_SCRIPT,
-        keyCount,
+        allKeys.length,
         ...allKeys,
         finalTotalCost,
         finalDiamonds,
@@ -272,16 +262,10 @@ async function sendMultiGiftCore(senderId, recipientIds, giftId, totalCost, cost
     );
 
     if (result === 0) {
-        return { success: false, message: "Insufficient coins! (-326772 preventer: multi-gift aborted)" };
+        return { success: false, message: "Insufficient coins for multi-gift!" };
     }
 
     const remainingCoins = await redis.get(senderKey);
-
-    const today = new Date().toISOString().slice(0, 10);
-    redis.zincrby(`leaderboard:daily:rich:${today}`, finalTotalCost, senderId).catch(() => {});
-    cleanRecipients.forEach(id => {
-        redis.zincrby(`leaderboard:daily:charm:${today}`, finalDiamonds, id).catch(() => {});
-    });
 
     if (roomId) {
         io.to(roomId).emit("GIFT_RECEIVED", {
@@ -290,18 +274,7 @@ async function sendMultiGiftCore(senderId, recipientIds, giftId, totalCost, cost
             giftId,
             giftName,
             totalCost: finalTotalCost,
-            costPerRecipient,
-            diamondsPerRecipient: finalDiamonds,
             isMulti: true,
-            timestamp: Date.now()
-        });
-
-        io.to(roomId).emit("multi_gift_sent", {
-            fromUid: senderId,
-            toUids: cleanRecipients,
-            giftId,
-            giftName,
-            costCoins: finalTotalCost,
             timestamp: Date.now()
         });
     }
@@ -316,8 +289,6 @@ async function sendMultiGiftCore(senderId, recipientIds, giftId, totalCost, cost
         giftId: giftId || "gift_multi",
         giftName: giftName || giftId,
         giftCost: finalTotalCost,
-        costPerRecipient,
-        diamondsPerRecipient: finalDiamonds,
         isMulti: true,
         timestamp: new Date()
     }).catch(err => console.error("Async MongoDB Multi Log Error:", err));
@@ -339,8 +310,6 @@ app.get('/', (req, res) => {
     res.json({
         status: 'Amison High-Speed Transaction Engine is Running',
         version: '2.1.0',
-        techStack: 'Node.js + Multi-User Redis Lua + MongoDB + Socket.IO',
-        features: ['single_gifting', 'multi_user_all_select_gifting', 'recharge_ledger', 'realtime_leaderboard'],
         timestamp: new Date()
     });
 });
@@ -349,6 +318,7 @@ app.get('/api/health', (req, res) => {
     res.json({ status: 'OK', redis: redis.status, mongo: mongoose.connection.readyState });
 });
 
+// Sync User Profile
 app.post('/api/user/sync', async (req, res) => {
     try {
         const { uid, displayName, numericId, avatarUrl, coins, diamonds } = req.body;
@@ -365,11 +335,6 @@ app.post('/api/user/sync', async (req, res) => {
                 diamonds: diamonds !== undefined ? diamonds : 0
             });
             await user.save();
-        } else if (coins !== undefined || diamonds !== undefined) {
-            if (coins !== undefined && coins > user.coins) user.coins = coins;
-            if (diamonds !== undefined && diamonds > user.diamonds) user.diamonds = diamonds;
-            user.updatedAt = new Date();
-            await user.save();
         }
 
         await Promise.all([
@@ -383,6 +348,7 @@ app.post('/api/user/sync', async (req, res) => {
     }
 });
 
+// Live Balance
 app.get('/api/wallet/:uid', async (req, res) => {
     try {
         const { uid } = req.params;
@@ -393,153 +359,110 @@ app.get('/api/wallet/:uid', async (req, res) => {
     }
 });
 
+// Send Gift
 app.post('/api/gift/send', async (req, res) => {
     try {
         const { senderId, receiverId, giftId, giftCost, roomId, giftName } = req.body;
-        if (!senderId || !receiverId || !giftCost || giftCost <= 0) {
-            return res.status(400).json({ success: false, message: "Invalid parameters" });
-        }
-
         const result = await sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, giftName);
-        if (!result.success) {
-            return res.status(400).json(result);
-        }
+        if (!result.success) return res.status(400).json(result);
         res.json(result);
     } catch (e) {
-        res.status(500).json({ success: false, message: "Server Transaction Error", error: e.message });
+        res.status(500).json({ success: false, error: e.message });
     }
 });
 
+// Multi Gift
 app.post('/api/gift/send-multi', async (req, res) => {
     try {
         const { senderId, recipientIds, giftId, totalCost, costPerRecipient, diamondsPerRecipient, roomId, giftName } = req.body;
-        if (!senderId || !recipientIds || !Array.isArray(recipientIds) || recipientIds.length === 0) {
-            return res.status(400).json({ success: false, message: "Invalid multi-recipient parameters" });
-        }
-
-        const result = await sendMultiGiftCore(
-            senderId,
-            recipientIds,
-            giftId,
-            totalCost,
-            costPerRecipient,
-            diamondsPerRecipient,
-            roomId,
-            giftName
-        );
-
-        if (!result.success) {
-            return res.status(400).json(result);
-        }
+        const result = await sendMultiGiftCore(senderId, recipientIds, giftId, totalCost, costPerRecipient, diamondsPerRecipient, roomId, giftName);
+        if (!result.success) return res.status(400).json(result);
         res.json(result);
     } catch (e) {
-        res.status(500).json({ success: false, message: "Multi-Gift Error", error: e.message });
-    }
-});
-
-app.get('/api/leaderboard/daily/rich', async (req, res) => {
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        const top = await redis.zrevrange(`leaderboard:daily:rich:${today}`, 0, 49, 'WITHSCORES');
-        const results = [];
-        for (let i = 0; i < top.length; i += 2) {
-            results.push({ uid: top[i], score: Number(top[i + 1]), rank: (i / 2) + 1 });
-        }
-        res.json({ success: true, date: today, leaderboard: results });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.get('/api/leaderboard/daily/charm', async (req, res) => {
-    try {
-        const today = new Date().toISOString().slice(0, 10);
-        const top = await redis.zrevrange(`leaderboard:daily:charm:${today}`, 0, 49, 'WITHSCORES');
-        const results = [];
-        for (let i = 0; i < top.length; i += 2) {
-            results.push({ uid: top[i], score: Number(top[i + 1]), rank: (i / 2) + 1 });
-        }
-        res.json({ success: true, date: today, leaderboard: results });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-app.post('/api/recharge/create', async (req, res) => {
-    try {
-        const { uid, numericId, coinsAdded, amountInr, paymentMethod, paymentRef } = req.body;
-        if (!uid || !coinsAdded || coinsAdded <= 0) {
-            return res.status(400).json({ success: false, message: "Invalid recharge parameters" });
-        }
-        await ensureUserWalletInRedis(uid);
-        const newCoins = await redis.incrby(`user:${uid}:coins`, coinsAdded);
-        const rchId = `RCH_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-        const recharge = await Recharge.create({
-            rechargeId: rchId,
-            uid,
-            numericId: numericId || 0,
-            coinsAdded,
-            amountInr: amountInr || 0,
-            paymentMethod: paymentMethod || "UPI",
-            paymentRef: paymentRef || "",
-            status: "SUCCESS"
-        });
-        await User.updateOne({ uid }, { $inc: { coins: coinsAdded, rechargeTotalInr: amountInr || 0 } }, { upsert: true });
-        res.json({ success: true, rechargeId: rchId, remainingCoins: Number(newCoins), recharge });
-    } catch (e) {
         res.status(500).json({ success: false, error: e.message });
     }
 });
 
-app.post('/api/withdraw/create', async (req, res) => {
+// Zego Token Generator
+app.post('/api/zego/token', (req, res) => {
     try {
-        const { uid, numericId, diamondsDeducted, amountInr, upiId, screenshotProofUrl } = req.body;
-        if (!uid || !diamondsDeducted || diamondsDeducted <= 0) {
-            return res.status(400).json({ success: false, message: "Invalid withdraw parameters" });
+        const { roomId, userId } = req.body;
+        if (!roomId || !userId) {
+            return res.status(400).json({ success: false, message: "Missing roomId or userId" });
         }
-        await ensureUserWalletInRedis(uid);
-        const currentDiamonds = Number(await redis.get(`user:${uid}:diamonds`) || 0);
-        if (currentDiamonds < diamondsDeducted) {
-            return res.status(400).json({ success: false, message: "Insufficient diamonds balance" });
-        }
-        const newDiamonds = await redis.decrby(`user:${uid}:diamonds`, diamondsDeducted);
-        const wdrId = `WDR_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-        const withdraw = await WithdrawRecord.create({
-            withdrawId: wdrId,
-            uid,
-            numericId: numericId || 0,
-            diamondsDeducted,
-            amountInr: amountInr || 0,
-            upiId: upiId || "",
-            status: "PENDING",
-            screenshotProofUrl: screenshotProofUrl || ""
-        });
-        res.json({ success: true, withdrawId: wdrId, remainingDiamonds: Number(newDiamonds), withdraw });
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
+        const effectiveTimeInSeconds = 7200;
+        const createTime = Math.floor(Date.now() / 1000);
+        const expireTime = createTime + effectiveTimeInSeconds;
+        const nonce = crypto.randomInt(100000, 999999);
+
+        const payloadObj = {
+            app_id: ZEGO_APP_ID,
+            user_id: String(userId),
+            room_id: String(roomId),
+            privilege: { 1: 1, 2: 1 },
+            create_time: createTime,
+            expire_time: expireTime,
+            nonce: nonce
+        };
+
+        const payloadStr = JSON.stringify(payloadObj);
+        const iv = crypto.randomBytes(16);
+        const cipher = crypto.createCipheriv('aes-128-cbc', Buffer.from(ZEGO_SERVER_SECRET.substring(0, 16), 'utf8'), iv);
+        let encrypted = cipher.update(payloadStr, 'utf8', 'binary');
+        encrypted += cipher.final('binary');
+
+        const tokenPayload = {
+            ver: 1,
+            hash: crypto.createHmac('sha256', ZEGO_SERVER_SECRET).update(payloadStr).digest('hex'),
+            data: Buffer.concat([iv, Buffer.from(encrypted, 'binary')]).toString('base64')
+        };
+        const token = "04" + Buffer.from(JSON.stringify(tokenPayload)).toString('base64');
+
+        res.json({ success: true, appId: ZEGO_APP_ID, roomId, userId, token, expireTime });
+    } catch (err) {
+        res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// ============================================================================
-// SOCKET.IO REAL-TIME EVENTS
-// ============================================================================
-
+// Socket.io Real-Time Room Events
 io.on('connection', (socket) => {
     socket.on('join_room', ({ roomId, uid }) => {
         if (!roomId) return;
         socket.join(roomId);
-        io.to(roomId).emit('user_joined', { uid, socketId: socket.id, timestamp: Date.now() });
     });
 
     socket.on('leave_room', ({ roomId, uid }) => {
         if (!roomId) return;
         socket.leave(roomId);
-        io.to(roomId).emit('user_left', { uid, timestamp: Date.now() });
     });
 
-    socket.on('claim_seat', async ({ roomId, seatIndex, uid }, callback) => {
-        const lockKey = `room:${roomId}:seat:${seatIndex}`;
+    socket.on('send_gift', async (data, callback) => {
         try {
-            const acquired = await redis.set(lockKey, uid, 'NX', 'EX', 7200);
-            if (acquired === 'OK') {
-                if (callback) callback({ success: true, message: 'Seat locked succes
+            const res = await sendGiftCore(data.senderId, data.receiverId, data.giftId, data.giftCost, data.roomId, data.giftName);
+            if (callback) callback(res);
+        } catch (e) {
+            if (callback) callback({ success: false, error: e.message });
+        }
+    });
+});
+
+// Periodic Redis -> MongoDB backup
+setInterval(async () => {
+    try {
+        const keys = await redis.keys('user:*:coins');
+        if (!keys || keys.length === 0) return;
+        for (const key of keys) {
+            const match = key.match(/^user:(.+):coins$/);
+            if (match && match[1]) {
+                const uid = match[1];
+                const coins = Number(await redis.get(key) || 0);
+                const diamonds = Number(await redis.get(`user:${uid}:diamonds`) || 0);
+                await User.updateOne({ uid }, { $set: { coins, diamonds, updatedAt: new Date() } }, { upsert: true });
+            }
+        }
+    } catch (e) {}
+}, 60000);
+
+server.listen(PORT, () => {
+    console.log(`Backend Server running on port ${PORT}`);
+});
