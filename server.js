@@ -5,85 +5,72 @@ const mongoose = require('mongoose');
 const Redis = require('ioredis');
 const cors = require('cors');
 const crypto = require('crypto');
+require('dotenv').config();
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: { origin: "*", methods: ["GET", "POST"] }
+});
+
 app.use(cors());
 app.use(express.json());
 
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
-});
-
-// Environment variables or defaults
-const PORT = process.env.PORT || 3000;
-const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://diablo:Diablo2234@amison.bgzqeqm.mongodb.net/amison_db?retryWrites=true&w=majority";
-const REDIS_URL = process.env.REDIS_URL || "redis://default:gQAAAAAAA56XAAIgcDI0MWNhYzRkZTc4NDU0Yjg5OWFjMDhiNGMyMGZhNzMyNA@vital-rooster-237207.upstash.io:6379";
-const ZEGO_APP_ID = process.env.ZEGO_APP_ID ? Number(process.env.ZEGO_APP_ID) : 123456789;
-const ZEGO_SERVER_SECRET = process.env.ZEGO_SERVER_SECRET || "0123456789abcdef0123456789abcdef";
-
-// Connect MongoDB Atlas
+// ============================================================================
+// DATABASE CONNECTIONS
+// ============================================================================
+const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/amison_voice";
 mongoose.connect(MONGO_URI)
-    .then(() => console.log('MongoDB Connected successfully to Amison DB'))
-    .catch(err => console.error('MongoDB Connection Error:', err));
+    .then(() => console.log('[MongoDB] Connected successfully'))
+    .catch(err => console.error('[MongoDB] Connection error:', err));
 
-// Connect Redis (Upstash / Local)
+const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 const redis = new Redis(REDIS_URL, {
-    tls: { rejectUnauthorized: false },
-    maxRetriesPerRequest: 3
+    maxRetriesPerRequest: 3,
+    enableReadyCheck: true
 });
-
-redis.on('connect', () => console.log('Redis connected successfully to In-Memory Engine'));
-redis.on('error', (err) => console.error('Redis Connection Error:', err));
+redis.on('connect', () => console.log('[Redis] Connected for atomic transactions'));
+redis.on('error', (err) => console.error('[Redis] Error:', err));
 
 // ============================================================================
-// MONGOOSE SCHEMAS (PERMANENT FINANCIAL & USER LEDGER)
+// MONGODB SCHEMAS & MODELS
 // ============================================================================
-
 const userSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true },
-    displayName: String,
-    numericId: Number,
-    coins: { type: Number, default: 1000 },
+    uid: { type: String, required: true, unique: true, index: true },
+    numericId: { type: Number, unique: true, index: true },
+    nickname: { type: String, default: "User" },
+    avatarUrl: { type: String, default: "" },
+    coins: { type: Number, default: 0 },
     diamonds: { type: Number, default: 0 },
-    totalCoinsSent: { type: Number, default: 0 },
-    totalDiamondsEarned: { type: Number, default: 0 },
-    avatarUrl: String,
-    updatedAt: { type: Date, default: Date.now },
-    createdAt: { type: Date, default: Date.now }
+    rechargeTotalInr: { type: Number, default: 0 },
+    svipLevel: { type: Number, default: 0 },
+    activeFrameUrl: { type: String, default: "" },
+    activeEntryEffectUrl: { type: String, default: "" },
+    badges: [{ type: String }],
+    isBanned: { type: Boolean, default: false },
+    updatedAt: { type: Date, default: Date.now }
 });
 const User = mongoose.model('User', userSchema);
 
 const transactionSchema = new mongoose.Schema({
-    transactionId: { type: String, required: true, unique: true },
-    senderId: { type: String, required: true },
-    senderName: String,
-    senderNumericId: Number,
-    receiverId: String,
-    recipientIds: [String],
-    recipientCount: { type: Number, default: 1 },
-    roomId: String,
+    txId: { type: String, required: true, unique: true, index: true },
+    senderUid: { type: String, required: true, index: true },
+    receiverUid: { type: String, required: true, index: true },
+    roomId: { type: String, index: true },
     giftId: String,
     giftName: String,
-    giftCost: { type: Number, required: true },
-    costPerRecipient: { type: Number, default: 0 },
-    diamondsPerRecipient: { type: Number, default: 0 },
-    receiverDiamonds: { type: Number, default: 0 },
-    isMulti: { type: Boolean, default: false },
+    coinAmount: { type: Number, required: true },
+    diamondAmount: { type: Number, required: true },
     timestamp: { type: Date, default: Date.now }
 });
 const Transaction = mongoose.model('Transaction', transactionSchema);
 
 const rechargeSchema = new mongoose.Schema({
     rechargeId: { type: String, required: true, unique: true },
-    uid: { type: String, required: true },
-    numericId: Number,
-    coinsAdded: { type: Number, required: true },
-    amountInr: { type: Number, required: true },
-    paymentMethod: { type: String, default: "UPI" },
+    uid: { type: String, required: true, index: true },
+    amountInr: Number,
+    coinsAdded: Number,
+    paymentGateway: String,
     paymentRef: String,
     status: { type: String, default: "SUCCESS" },
     createdAt: { type: Date, default: Date.now }
@@ -104,9 +91,8 @@ const withdrawSchema = new mongoose.Schema({
 const WithdrawRecord = mongoose.model('WithdrawRecord', withdrawSchema);
 
 // ============================================================================
-// ATOMIC REDIS LUA SCRIPTS (0ms CONCURRENCY)
+// ATOMIC REDIS LUA SCRIPTS
 // ============================================================================
-
 const LUA_SINGLE_GIFT_SCRIPT = `
   local current_coins = tonumber(redis.call('get', KEYS[1]) or "0")
   local cost = tonumber(ARGV[1])
@@ -125,278 +111,141 @@ const LUA_MULTI_GIFT_SCRIPT = `
   local total_cost = tonumber(ARGV[1])
   local reward = tonumber(ARGV[2])
   local count = tonumber(ARGV[3])
-
   if current_coins < total_cost then
     return 0
   end
-
   redis.call('decrby', KEYS[1], total_cost)
   redis.call('incrby', KEYS[2], total_cost)
-
   for i = 1, count do
     local recipient_key = KEYS[i + 2]
     redis.call('incrby', recipient_key, reward)
   end
-
   return 1
 `;
 
-async function ensureUserWalletInRedis(uid, initialCoins = 0, initialDiamonds = 0) {
-    const senderKey = `user:${uid}:coins`;
-    const receiverKey = `user:${uid}:diamonds`;
-    const sentKey = `user:${uid}:total_sent`;
-    
-    const [cachedCoins, cachedDiamonds] = await Promise.all([
-        redis.get(senderKey),
-        redis.get(receiverKey)
-    ]);
-
-    if (cachedCoins === null || cachedDiamonds === null) {
+// Helper: Ensure user wallet is in Redis cache
+async function ensureUserWalletInRedis(uid) {
+    const coinKey = `user:${uid}:coins`;
+    const diamondKey = `user:${uid}:diamonds`;
+    const exists = await redis.exists(coinKey);
+    if (!exists) {
         let user = await User.findOne({ uid });
         if (!user) {
-            user = new User({
-                uid,
-                coins: initialCoins || 1000,
-                diamonds: initialDiamonds || 0
-            });
-            await user.save();
+            user = await User.create({ uid, coins: 0, diamonds: 0 });
         }
-        const coins = cachedCoins !== null ? Number(cachedCoins) : user.coins;
-        const diamonds = cachedDiamonds !== null ? Number(cachedDiamonds) : user.diamonds;
-        await Promise.all([
-            redis.set(senderKey, coins),
-            redis.set(receiverKey, diamonds),
-            redis.setnx(sentKey, user.totalCoinsSent || 0)
-        ]);
-        return { coins, diamonds };
+        await redis.set(coinKey, user.coins || 0);
+        await redis.set(diamondKey, user.diamonds || 0);
     }
-
-    return { coins: Number(cachedCoins), diamonds: Number(cachedDiamonds) };
-}
-
-async function sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, giftName = "") {
-    const senderKey = `user:${senderId}:coins`;
-    const sentKey = `user:${senderId}:total_sent`;
-    const receiverKey = `user:${receiverId}:diamonds`;
-
-    await Promise.all([
-        ensureUserWalletInRedis(senderId),
-        ensureUserWalletInRedis(receiverId)
-    ]);
-
-    const result = await redis.eval(LUA_SINGLE_GIFT_SCRIPT, 3, senderKey, sentKey, receiverKey, giftCost);
-
-    if (result === 0) {
-        return { success: false, message: "Insufficient coins! Balance strictly protected." };
-    }
-
-    const [remainingCoins, newDiamonds] = await Promise.all([
-        redis.get(senderKey),
-        redis.get(receiverKey)
-    ]);
-
-    const today = new Date().toISOString().slice(0, 10);
-    redis.zincrby(`leaderboard:daily:rich:${today}`, giftCost, senderId).catch(() => {});
-    redis.zincrby(`leaderboard:daily:charm:${today}`, giftCost, receiverId).catch(() => {});
-
-    if (roomId) {
-        io.to(roomId).emit("GIFT_RECEIVED", {
-            senderId,
-            receiverId,
-            giftId,
-            giftName,
-            cost: giftCost,
-            timestamp: Date.now()
-        });
-    }
-
-    const txId = `TXN_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-    Transaction.create({
-        transactionId: txId,
-        senderId,
-        receiverId,
-        roomId: roomId || "",
-        giftId: giftId || "gift_custom",
-        giftName: giftName || giftId,
-        giftCost,
-        receiverDiamonds: giftCost,
-        timestamp: new Date()
-    }).catch(err => console.error("Async MongoDB Log Error:", err));
-
-    return {
-        success: true,
-        message: "Gift sent successfully!",
-        remainingCoins: Number(remainingCoins),
-        receiverDiamonds: Number(newDiamonds),
-        transactionId: txId
-    };
-}
-
-async function sendMultiGiftCore(senderId, recipientIds, giftId, totalCost, costPerRecipient, diamondsPerRecipient, roomId, giftName = "") {
-    if (!recipientIds || recipientIds.length === 0) {
-        return { success: false, message: "No recipients selected" };
-    }
-
-    const cleanRecipients = recipientIds.filter(id => id && id.trim().length > 0);
-    const count = cleanRecipients.length;
-    const finalTotalCost = totalCost || (costPerRecipient * count);
-    const finalDiamonds = diamondsPerRecipient || costPerRecipient;
-
-    await Promise.all([
-        ensureUserWalletInRedis(senderId),
-        ...cleanRecipients.map(id => ensureUserWalletInRedis(id))
-    ]);
-
-    const senderKey = `user:${senderId}:coins`;
-    const sentKey = `user:${senderId}:total_sent`;
-    const recipientKeys = cleanRecipients.map(id => `user:${id}:diamonds`);
-    const allKeys = [senderKey, sentKey, ...recipientKeys];
-
-    const result = await redis.eval(
-        LUA_MULTI_GIFT_SCRIPT,
-        allKeys.length,
-        ...allKeys,
-        finalTotalCost,
-        finalDiamonds,
-        count
-    );
-
-    if (result === 0) {
-        return { success: false, message: "Insufficient coins for multi-gift!" };
-    }
-
-    const remainingCoins = await redis.get(senderKey);
-
-    if (roomId) {
-        io.to(roomId).emit("GIFT_RECEIVED", {
-            senderId,
-            recipientIds: cleanRecipients,
-            giftId,
-            giftName,
-            totalCost: finalTotalCost,
-            isMulti: true,
-            timestamp: Date.now()
-        });
-    }
-
-    const txId = `TXN_MULTI_${Date.now()}_${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-    Transaction.create({
-        transactionId: txId,
-        senderId,
-        recipientIds: cleanRecipients,
-        recipientCount: count,
-        roomId: roomId || "",
-        giftId: giftId || "gift_multi",
-        giftName: giftName || giftId,
-        giftCost: finalTotalCost,
-        isMulti: true,
-        timestamp: new Date()
-    }).catch(err => console.error("Async MongoDB Multi Log Error:", err));
-
-    return {
-        success: true,
-        message: "Multi-gift sent successfully!",
-        remainingCoins: Number(remainingCoins),
-        recipientCount: count,
-        transactionId: txId
-    };
 }
 
 // ============================================================================
-// REST API ENDPOINTS
+// ZEGO CLOUD DYNAMIC CREDENTIALS (LOADED DIRECTLY FROM FIRESTORE)
+// Reads from Firestore collection 'system_zego', document 'zego_credentials'
 // ============================================================================
+const FIREBASE_PROJECT_ID = process.env.FIREBASE_PROJECT_ID || "ammu-689be";
 
-app.get('/', (req, res) => {
+let activeZegoConfig = {
+    appId: 390326397,
+    appSign: "30c6d4adf34feef17b1c34882f89398da8851cb3c3ce01cd3abe69d431ebebea",
+    serverSecret: "30c6d4adf34feef17b1c34882f89398da8851cb3c3ce01cd3abe69d431ebebea",
+    chatAppId: 1905410410,
+    chatAppSign: "7446873045e4e6f318a609e1c50a64e1ca4d746600f71dc8eb3401528723d6b6",
+    isVoiceEnabled: true,
+    lastFetchedAt: null,
+    source: "default"
+};
+
+async function fetchZegoCredentialsFromFirestore() {
+    try {
+        const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${FIREBASE_PROJECT_ID}/databases/(default)/documents/system_zego/zego_credentials`;
+        const res = await fetch(firestoreUrl);
+        if (!res.ok) {
+            console.warn(`[ZegoFirestore] Firestore response ${res.status}: ${res.statusText}`);
+            return activeZegoConfig;
+        }
+        const data = await res.json();
+        if (data && data.fields) {
+            const f = data.fields;
+            const parseVal = (field) => {
+                if (!field) return null;
+                if (field.integerValue !== undefined) return Number(field.integerValue);
+                if (field.stringValue !== undefined) return field.stringValue;
+                if (field.booleanValue !== undefined) return field.booleanValue;
+                return null;
+            };
+
+            const appId = parseVal(f.AppId) || parseVal(f.appId) || parseVal(f.zegoVoiceAppId);
+            const appSign = parseVal(f.AppSign) || parseVal(f.appSign) || parseVal(f.zegoVoiceAppSign);
+            const serverSecret = parseVal(f.serverSecret) || parseVal(f.zegoServerSecret) || appSign;
+            const chatAppId = parseVal(f.chatAppId) || parseVal(f.zegoChatAppId);
+            const chatAppSign = parseVal(f.chatAppSign) || parseVal(f.zegoChatAppSign);
+            const isVoiceEnabled = parseVal(f.isVoiceEnabled);
+
+            if (appId) activeZegoConfig.appId = Number(appId);
+            if (appSign) activeZegoConfig.appSign = String(appSign);
+            if (serverSecret) activeZegoConfig.serverSecret = String(serverSecret);
+            if (chatAppId) activeZegoConfig.chatAppId = Number(chatAppId);
+            if (chatAppSign) activeZegoConfig.chatAppSign = String(chatAppSign);
+            if (isVoiceEnabled !== null && isVoiceEnabled !== undefined) {
+                activeZegoConfig.isVoiceEnabled = Boolean(isVoiceEnabled);
+            }
+
+            activeZegoConfig.lastFetchedAt = new Date().toISOString();
+            activeZegoConfig.source = "firestore:system_zego/zego_credentials";
+            console.log(`[ZegoFirestore] Synced with Firestore! Active AppId: ${activeZegoConfig.appId}`);
+        }
+    } catch (err) {
+        console.warn(`[ZegoFirestore] Warning fetching from Firestore: ${err.message}`);
+    }
+    return activeZegoConfig;
+}
+
+// Fetch on startup and every 5 minutes
+fetchZegoCredentialsFromFirestore();
+setInterval(fetchZegoCredentialsFromFirestore, 5 * 60 * 1000);
+
+// Endpoint to view current Zego config loaded from Firestore
+app.get('/api/zego/config', async (req, res) => {
+    if (req.query.refresh === 'true') {
+        await fetchZegoCredentialsFromFirestore();
+    }
     res.json({
-        status: 'Amison High-Speed Transaction Engine is Running',
-        version: '2.1.0',
-        timestamp: new Date()
+        success: true,
+        firebaseProjectId: FIREBASE_PROJECT_ID,
+        firestorePath: "system_zego/zego_credentials",
+        config: {
+            appId: activeZegoConfig.appId,
+            appSign: activeZegoConfig.appSign ? (activeZegoConfig.appSign.substring(0, 6) + "..." + activeZegoConfig.appSign.substring(activeZegoConfig.appSign.length - 4)) : null,
+            chatAppId: activeZegoConfig.chatAppId,
+            isVoiceEnabled: activeZegoConfig.isVoiceEnabled,
+            source: activeZegoConfig.source,
+            lastFetchedAt: activeZegoConfig.lastFetchedAt
+        }
     });
 });
 
-app.get('/api/health', (req, res) => {
-    res.json({ status: 'OK', redis: redis.status, mongo: mongoose.connection.readyState });
-});
-
-// Sync User Profile
-app.post('/api/user/sync', async (req, res) => {
-    try {
-        const { uid, displayName, numericId, avatarUrl, coins, diamonds } = req.body;
-        if (!uid) return res.status(400).json({ error: 'Missing UID' });
-
-        let user = await User.findOne({ uid });
-        if (!user) {
-            user = new User({
-                uid,
-                displayName: displayName || "Amison User",
-                numericId: numericId || Math.floor(100000000 + Math.random() * 900000000),
-                avatarUrl: avatarUrl || "",
-                coins: coins !== undefined ? coins : 1000,
-                diamonds: diamonds !== undefined ? diamonds : 0
-            });
-            await user.save();
-        }
-
-        await Promise.all([
-            redis.set(`user:${uid}:coins`, user.coins),
-            redis.set(`user:${uid}:diamonds`, user.diamonds)
-        ]);
-
-        res.json({ success: true, user: { uid: user.uid, coins: user.coins, diamonds: user.diamonds } });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Live Balance
-app.get('/api/wallet/:uid', async (req, res) => {
-    try {
-        const { uid } = req.params;
-        const wallet = await ensureUserWalletInRedis(uid);
-        res.json({ success: true, uid, coins: wallet.coins, diamonds: wallet.diamonds });
-    } catch (e) {
-        res.status(500).json({ error: e.message });
-    }
-});
-
-// Send Gift
-app.post('/api/gift/send', async (req, res) => {
-    try {
-        const { senderId, receiverId, giftId, giftCost, roomId, giftName } = req.body;
-        const result = await sendGiftCore(senderId, receiverId, giftId, giftCost, roomId, giftName);
-        if (!result.success) return res.status(400).json(result);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-// Multi Gift
-app.post('/api/gift/send-multi', async (req, res) => {
-    try {
-        const { senderId, recipientIds, giftId, totalCost, costPerRecipient, diamondsPerRecipient, roomId, giftName } = req.body;
-        const result = await sendMultiGiftCore(senderId, recipientIds, giftId, totalCost, costPerRecipient, diamondsPerRecipient, roomId, giftName);
-        if (!result.success) return res.status(400).json(result);
-        res.json(result);
-    } catch (e) {
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-// Zego Token Generator
-app.post('/api/zego/token', (req, res) => {
+// Dynamic RTC Token generation using Firestore credentials
+app.post('/api/zego/token', async (req, res) => {
     try {
         const { roomId, userId } = req.body;
         if (!roomId || !userId) {
             return res.status(400).json({ success: false, message: "Missing roomId or userId" });
         }
-        const effectiveTimeInSeconds = 7200;
+
+        if (!activeZegoConfig.lastFetchedAt) {
+            await fetchZegoCredentialsFromFirestore();
+        }
+
+        const effectiveTimeInSeconds = 7200; // 2 hours
         const createTime = Math.floor(Date.now() / 1000);
         const expireTime = createTime + effectiveTimeInSeconds;
         const nonce = crypto.randomInt(100000, 999999);
 
+        const currentAppId = activeZegoConfig.appId;
+        const currentSecret = activeZegoConfig.serverSecret || activeZegoConfig.appSign;
+
         const payloadObj = {
-            app_id: ZEGO_APP_ID,
+            app_id: currentAppId,
             user_id: String(userId),
             room_id: String(roomId),
             privilege: { 1: 1, 2: 1 },
@@ -407,62 +256,141 @@ app.post('/api/zego/token', (req, res) => {
 
         const payloadStr = JSON.stringify(payloadObj);
         const iv = crypto.randomBytes(16);
-        const cipher = crypto.createCipheriv('aes-128-cbc', Buffer.from(ZEGO_SERVER_SECRET.substring(0, 16), 'utf8'), iv);
+        const secretKey = Buffer.from(currentSecret.padEnd(32, '0').substring(0, 32), 'utf8');
+        const cipher = crypto.createCipheriv('aes-256-cbc', secretKey, iv);
         let encrypted = cipher.update(payloadStr, 'utf8', 'binary');
         encrypted += cipher.final('binary');
 
         const tokenPayload = {
             ver: 1,
-            hash: crypto.createHmac('sha256', ZEGO_SERVER_SECRET).update(payloadStr).digest('hex'),
+            hash: crypto.createHmac('sha256', currentSecret).update(payloadStr).digest('hex'),
             data: Buffer.concat([iv, Buffer.from(encrypted, 'binary')]).toString('base64')
         };
         const token = "04" + Buffer.from(JSON.stringify(tokenPayload)).toString('base64');
 
-        res.json({ success: true, appId: ZEGO_APP_ID, roomId, userId, token, expireTime });
+        res.json({
+            success: true,
+            appId: currentAppId,
+            roomId,
+            userId,
+            token,
+            expireTime,
+            source: activeZegoConfig.source
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// Socket.io Real-Time Room Events
-io.on('connection', (socket) => {
-    socket.on('join_room', ({ roomId, uid }) => {
-        if (!roomId) return;
-        socket.join(roomId);
-    });
-
-    socket.on('leave_room', ({ roomId, uid }) => {
-        if (!roomId) return;
-        socket.leave(roomId);
-    });
-
-    socket.on('send_gift', async (data, callback) => {
-        try {
-            const res = await sendGiftCore(data.senderId, data.receiverId, data.giftId, data.giftCost, data.roomId, data.giftName);
-            if (callback) callback(res);
-        } catch (e) {
-            if (callback) callback({ success: false, error: e.message });
-        }
-    });
+// ============================================================================
+// API ROUTES: WALLET & GIFTING
+// ============================================================================
+app.get('/api/wallet/balance/:uid', async (req, res) => {
+    try {
+        const { uid } = req.params;
+        await ensureUserWalletInRedis(uid);
+        const coins = await redis.get(`user:${uid}:coins`);
+        const diamonds = await redis.get(`user:${uid}:diamonds`);
+        res.json({ success: true, uid, coins: Number(coins || 0), diamonds: Number(diamonds || 0) });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
 });
 
-// Periodic Redis -> MongoDB backup
+app.post('/api/gift/send', async (req, res) => {
+    try {
+        const { senderUid, receiverUid, roomId, giftId, giftName, cost } = req.body;
+        if (!senderUid || !receiverUid || !cost || cost <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid parameters" });
+        }
+        await ensureUserWalletInRedis(senderUid);
+        await ensureUserWalletInRedis(receiverUid);
+
+        const keys = [
+            `user:${senderUid}:coins`,
+            `user:${receiverUid}:diamonds`,
+            `room:${roomId || 'global'}:exp`
+        ];
+
+        const result = await redis.eval(LUA_SINGLE_GIFT_SCRIPT, 3, keys[0], keys[1], keys[2], cost);
+        if (result === 0) {
+            return res.status(400).json({ success: false, message: "INSUFFICIENT_COINS" });
+        }
+
+        const remainingCoins = await redis.get(`user:${senderUid}:coins`);
+        const receiverDiamonds = await redis.get(`user:${receiverUid}:diamonds`);
+
+        const txId = `TX_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+        Transaction.create({
+            txId, senderUid, receiverUid, roomId, giftId, giftName,
+            coinAmount: cost, diamondAmount: cost
+        }).catch(err => console.error('[TxLog] Error:', err));
+
+        if (roomId) {
+            io.to(`room_${roomId}`).emit('gift_broadcast', {
+                txId, senderUid, receiverUid, giftId, giftName, cost, timestamp: Date.now()
+            });
+        }
+
+        res.json({
+            success: true,
+            txId,
+            remainingCoins: Number(remainingCoins),
+            receiverDiamonds: Number(receiverDiamonds)
+        });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+app.post('/api/recharge/success', async (req, res) => {
+    try {
+        const { uid, amountInr, coinsAdded, paymentGateway, paymentRef } = req.body;
+        if (!uid || !coinsAdded || coinsAdded <= 0) {
+            return res.status(400).json({ success: false, message: "Invalid recharge parameters" });
+        }
+        await ensureUserWalletInRedis(uid);
+        const newCoins = await redis.incrby(`user:${uid}:coins`, coinsAdded);
+        const rchId = `RCH_${Date.now()}_${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        await Recharge.create({
+            rechargeId: rchId, uid, amountInr: amountInr || 0,
+            coinsAdded, paymentGateway: paymentGateway || "MANUAL",
+            paymentRef: paymentRef || "", status: "SUCCESS"
+        });
+        await User.updateOne({ uid }, { $inc: { coins: coinsAdded, rechargeTotalInr: amountInr || 0 } }, { upsert: true });
+        res.json({ success: true, rechargeId: rchId, remainingCoins: Number(newCoins) });
+    } catch (e) {
+        res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Periodic Redis to MongoDB sync every 30 seconds
 setInterval(async () => {
     try {
-        const keys = await redis.keys('user:*:coins');
-        if (!keys || keys.length === 0) return;
-        for (const key of keys) {
-            const match = key.match(/^user:(.+):coins$/);
-            if (match && match[1]) {
-                const uid = match[1];
-                const coins = Number(await redis.get(key) || 0);
+        const userCoinKeys = await redis.keys('user:*:coins');
+        for (const key of userCoinKeys) {
+            const uid = key.split(':')[1];
+            if (uid) {
+                const coins = Number(await redis.get(`user:${uid}:coins`) || 0);
                 const diamonds = Number(await redis.get(`user:${uid}:diamonds`) || 0);
                 await User.updateOne({ uid }, { $set: { coins, diamonds, updatedAt: new Date() } }, { upsert: true });
             }
         }
-    } catch (e) {}
-}, 60000);
+    } catch (err) {
+        console.error('[Sync] Error:', err.message);
+    }
+}, 30000);
 
+app.get('/health', (req, res) => {
+    res.json({
+        status: "OK",
+        zegoSource: activeZegoConfig.source,
+        zegoAppId: activeZegoConfig.appId,
+        timestamp: new Date().toISOString()
+    });
+});
+
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
-    console.log(`Backend Server running on port ${PORT}`);
+    console.log(`Server listening on port ${PORT}`);
 });
