@@ -1,32 +1,38 @@
 require('dotenv').config();
 const express = require('express');
+const http = require('http');
 const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const connectDB = require('./config/db');
-const { connectRedis } = require('./config/redis');
+const { Server } = require('socket.io');
+const mongoose = require('mongoose');
+const Redis = require('ioredis');
 
 const app = express();
+const server = http.createServer(app);
 
-// Database Connections
-connectDB();
-connectRedis();
-
-// Middleware
+app.use(cors({ origin: '*' }));
 app.use(express.json());
-app.use(cors());
-app.use(helmet());
-app.use(morgan('dev'));
 
-// Routes
-app.use('/api/auth', require('./routes/authRoutes'));
+const io = new Server(server, { cors: { origin: '*' } });
 
-// Health Check
-app.get('/', (req, res) => {
-  res.send('Amison Backend API is running...');
+// Redis Setup
+let redis = null;
+if (process.env.REDIS_URI) {
+  redis = new Redis(process.env.REDIS_URI);
+}
+
+// MongoDB Setup
+mongoose.connect(process.env.MONGODB_URI)
+  .then(() => console.log('MongoDB Atlas Connected'))
+  .catch(err => console.error('MongoDB Error:', err));
+
+io.on('connection', (socket) => {
+  socket.on('join_user', (userId) => socket.join(`user:${userId}`));
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+const userRoutes = require('./routes/userRoutes')(io, redis);
+app.use('/api/users', userRoutes);
+
+app.get('/health', (req, res) => res.json({ status: 'ok', service: 'Amison Backend' }));
+
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
