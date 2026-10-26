@@ -3,6 +3,8 @@ const mongoose = require('mongoose');
 const UserSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true, unique: true, index: true },
+    firebaseUid: { type: String, default: '', index: true },
+    numericId: { type: String, default: '', index: true },
     uid: { type: String, default: '' },
     name: { type: String, default: 'User' },
     profilePhoto: { type: String, default: '' },
@@ -22,9 +24,12 @@ const UserSchema = new mongoose.Schema(
     isBanned: { type: Boolean, default: false },
     banReason: { type: String, default: '' },
     deviceId: { type: String, default: '' },
-    sessionId: { type: String, default: '' }
+    sessionId: { type: String, default: '' },
+    bio: { type: String, default: '' }
   },
-  { timestamps: true }
+  {
+    timestamps: true
+  }
 );
 
 module.exports = mongoose.model('User', UserSchema);
