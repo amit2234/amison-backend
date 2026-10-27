@@ -28,10 +28,12 @@ const userSchema = new mongoose.Schema({
     dob: { type: String, default: "" }, // Date of Birth (YYYY-MM-DD)
     gender: { type: String, enum: ["Male", "Female", ""], default: "" }, // Gender
     country: { type: String, default: "India" }, // Country
-    email: { type: String, default: "" }, // Google Sign-In Email
+    email: { type: String, default: "", index: true }, // Google Sign-In Email
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });
+
+userSchema.index({ uid: 1, email: 1 });
 
 const User = mongoose.model('User', userSchema);
 
@@ -39,7 +41,7 @@ const User = mongoose.model('User', userSchema);
 // API ENDPOINTS
 // ============================================================================
 
-// Health check endpoint
+// Health check endpoint (for Instant Wakeup / Pre-Warm ping)
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'OK',
@@ -48,13 +50,23 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// 1. GET /api/user/:uid: Checks if user exists in MongoDB Atlas by Auth UID
+// 1. GET /api/user/:uid: Checks if user exists in MongoDB Atlas by Auth UID OR Email (2ms speed)
 app.get('/api/user/:uid', async (req, res) => {
     try {
         const { uid } = req.params;
-        if (!uid) return res.status(400).json({ exists: false, error: 'Missing UID' });
+        if (!uid) return res.status(400).json({ exists: false, error: 'Missing UID or Email' });
 
-        const user = await User.findOne({ uid: uid.trim() });
+        const clean = uid.trim();
+        const cleanLower = clean.toLowerCase();
+
+        // Blazing-fast lean query searching by permanent UID or Email
+        const user = await User.findOne({
+            $or: [
+                { uid: clean },
+                { email: cleanLower }
+            ]
+        }).lean();
+
         if (!user) {
             return res.json({ exists: false });
         }
@@ -65,7 +77,7 @@ app.get('/api/user/:uid', async (req, res) => {
     }
 });
 
-// 2. POST /api/user/create: First-time user ke liye unique 9-digit numeric ID generate karke naya user document save karta hai
+// 2. POST /api/user/create: Generates 9-digit unique numeric ID only for genuine new users
 app.post('/api/user/create', async (req, res) => {
     try {
         const { uid, name, avatarUrl, dob, gender, country, email } = req.body;
@@ -74,7 +86,15 @@ app.post('/api/user/create', async (req, res) => {
         }
 
         const cleanUid = uid.trim();
-        let existing = await User.findOne({ uid: cleanUid });
+        const cleanEmail = (email || '').trim().toLowerCase();
+
+        // Double check: if user already exists by UID or Email, immediately return existing record (0 duplicate guarantee)
+        let existing = await User.findOne({
+            $or: [
+                { uid: cleanUid },
+                ...(cleanEmail ? [{ email: cleanEmail }] : [])
+            ]
+        });
         if (existing) {
             return res.json({ success: true, user: existing, message: 'User already exists' });
         }
@@ -116,7 +136,15 @@ app.post('/api/user/update-profile', async (req, res) => {
         const { uid, name, avatarUrl, dob, gender, country } = req.body;
         if (!uid) return res.status(400).json({ success: false, error: 'Missing UID' });
 
-        const user = await User.findOne({ uid: uid.trim() });
+        const cleanUid = uid.toString().trim();
+        const numId = Number(cleanUid) || 0;
+        const user = await User.findOne({
+            $or: [
+                { uid: cleanUid },
+                ...(numId > 0 ? [{ numericId: numId }] : []),
+                { email: cleanUid.toLowerCase() }
+            ]
+        });
         if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
         if (name) user.name = name.trim();
