@@ -50,7 +50,7 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// 1. GET /api/user/:uid: Checks if user exists in MongoDB Atlas by Auth UID OR Email (2ms speed)
+// 1. GET /api/user/:uid: Checks if user exists in MongoDB Atlas by Auth UID, Numeric ID, OR Email
 app.get('/api/user/:uid', async (req, res) => {
     try {
         const { uid } = req.params;
@@ -58,11 +58,14 @@ app.get('/api/user/:uid', async (req, res) => {
 
         const clean = uid.trim();
         const cleanLower = clean.toLowerCase();
+        const numId = Number(clean);
+        const queryNum = !isNaN(numId) ? numId : null;
 
-        // Blazing-fast lean query searching by permanent UID or Email
+        // Blazing-fast lean query searching by permanent UID, numericId, or Email
         const user = await User.findOne({
             $or: [
                 { uid: clean },
+                ...(queryNum !== null ? [{ numericId: queryNum }] : []),
                 { email: cleanLower }
             ]
         }).lean();
@@ -74,6 +77,38 @@ app.get('/api/user/:uid', async (req, res) => {
     } catch (e) {
         console.error('[MongoDB] Fetch user error:', e);
         res.status(500).json({ exists: false, error: e.message });
+    }
+});
+
+// 1.1 GET /api/users/search?query=...: Search users strictly by numericId
+app.get('/api/users/search', async (req, res) => {
+    try {
+        const query = (req.query.query || '').trim();
+        if (!query) return res.json({ users: [] });
+
+        const numId = Number(query);
+        const queryNum = !isNaN(numId) ? numId : null;
+
+        // Strictly search by numericId (exact number or numeric string regex)
+        const users = await User.find({
+            $or: [
+                ...(queryNum !== null ? [{ numericId: queryNum }] : []),
+                {
+                    $expr: {
+                        $regexMatch: {
+                            input: { $toString: "$numericId" },
+                            regex: query,
+                            options: "i"
+                        }
+                    }
+                }
+            ]
+        }).limit(20).lean();
+
+        return res.json({ users: users || [] });
+    } catch (e) {
+        console.error('[MongoDB] Search users error:', e);
+        res.status(500).json({ users: [], error: e.message });
     }
 });
 
