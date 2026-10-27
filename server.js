@@ -136,15 +136,7 @@ app.post('/api/user/update-profile', async (req, res) => {
         const { uid, name, avatarUrl, dob, gender, country } = req.body;
         if (!uid) return res.status(400).json({ success: false, error: 'Missing UID' });
 
-        const cleanUid = uid.toString().trim();
-        const numId = Number(cleanUid) || 0;
-        const user = await User.findOne({
-            $or: [
-                { uid: cleanUid },
-                ...(numId > 0 ? [{ numericId: numId }] : []),
-                { email: cleanUid.toLowerCase() }
-            ]
-        });
+        const user = await User.findOne({ uid: uid.trim() });
         if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
         if (name) user.name = name.trim();
