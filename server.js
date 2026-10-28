@@ -29,6 +29,8 @@ const userSchema = new mongoose.Schema({
     gender: { type: String, enum: ["Male", "Female", ""], default: "" }, // Gender
     country: { type: String, default: "India" }, // Country
     email: { type: String, default: "", index: true }, // Google Sign-In Email
+    coins: { type: Number, default: 0, min: 0 }, // Gold Coins Balance (Me -> Wallet)
+    diamonds: { type: Number, default: 0, min: 0 }, // Diamonds Balance (Me -> Wallet)
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });
@@ -72,6 +74,8 @@ app.get('/api/user/:uid', async (req, res) => {
         if (!user) {
             return res.json({ exists: false });
         }
+        user.coins = Math.max(0, Number(user.coins) || 0);
+        user.diamonds = Math.max(0, Number(user.diamonds) || 0);
         return res.json({ exists: true, user });
     } catch (e) {
         console.error('[MongoDB] Fetch user error:', e);
@@ -157,7 +161,9 @@ app.post('/api/user/create', async (req, res) => {
             dob: dob || "",
             gender: gender || "",
             country: country || "India",
-            email: email || ""
+            email: email || "",
+            coins: 0,
+            diamonds: 0
         });
 
         await newUser.save();
@@ -211,6 +217,14 @@ app.post('/api/user/update-profile', async (req, res) => {
 // Mount MongoDB Friends Router (Follow/Followers/Friends)
 const friendRoutes = require('./friends');
 app.use('/api', friendRoutes);
+
+// Mount High-Speed 0-Trust Wallet + Gift Transaction Engine (MongoDB + Redis)
+const { router: walletRoutes } = require('./wallet');
+app.use('/api', walletRoutes);
+
+// Mount Dedicated Newop Master Admin Router (Separate collections & logic in newop.js)
+const newopRoutes = require('./newop');
+app.use('/api/newop', newopRoutes);
 
 // Start Server
 server.listen(PORT, () => {
