@@ -50,7 +50,7 @@ app.get('/api/health', (req, res) => {
     });
 });
 
-// 1. GET /api/user/:uid: Checks if user exists in MongoDB Atlas by Auth UID, Numeric ID, OR Email
+// 1. GET /api/user/:uid: Checks if user exists in MongoDB Atlas by Auth UID OR Email (2ms speed)
 app.get('/api/user/:uid', async (req, res) => {
     try {
         const { uid } = req.params;
@@ -58,14 +58,13 @@ app.get('/api/user/:uid', async (req, res) => {
 
         const clean = uid.trim();
         const cleanLower = clean.toLowerCase();
-        const numId = Number(clean);
-        const queryNum = !isNaN(numId) ? numId : null;
+        const numId = Number(clean) || 0;
 
         // Blazing-fast lean query searching by permanent UID, numericId, or Email
         const user = await User.findOne({
             $or: [
                 { uid: clean },
-                ...(queryNum !== null ? [{ numericId: queryNum }] : []),
+                ...(numId > 0 ? [{ numericId: numId }] : []),
                 { email: cleanLower }
             ]
         }).lean();
@@ -80,28 +79,19 @@ app.get('/api/user/:uid', async (req, res) => {
     }
 });
 
-// 1.1 GET /api/users/search?query=...: Search users strictly by numericId
+// 1.1 GET /api/users/search?query=...: Search users by numericId, uid, or name
 app.get('/api/users/search', async (req, res) => {
     try {
         const query = (req.query.query || '').trim();
         if (!query) return res.json({ users: [] });
 
-        const numId = Number(query);
-        const queryNum = !isNaN(numId) ? numId : null;
-
-        // Strictly search by numericId (exact number or numeric string regex)
+        const numId = Number(query) || 0;
         const users = await User.find({
             $or: [
-                ...(queryNum !== null ? [{ numericId: queryNum }] : []),
-                {
-                    $expr: {
-                        $regexMatch: {
-                            input: { $toString: "$numericId" },
-                            regex: query,
-                            options: "i"
-                        }
-                    }
-                }
+                { uid: query },
+                ...(numId > 0 ? [{ numericId: numId }] : []),
+                { numericId: { $regex: query, $options: 'i' } },
+                { name: { $regex: query, $options: 'i' } }
             ]
         }).limit(20).lean();
 
@@ -171,14 +161,29 @@ app.post('/api/user/update-profile', async (req, res) => {
         const { uid, name, avatarUrl, dob, gender, country } = req.body;
         if (!uid) return res.status(400).json({ success: false, error: 'Missing UID' });
 
-        const user = await User.findOne({ uid: uid.trim() });
+        const cleanUid = uid.toString().trim();
+        const numId = Number(cleanUid) || 0;
+        const user = await User.findOne({
+            $or: [
+                { uid: cleanUid },
+                ...(numId > 0 ? [{ numericId: numId }] : []),
+                { email: cleanUid.toLowerCase() }
+            ]
+        });
         if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
-        if (name) user.name = name.trim();
-        if (avatarUrl !== undefined) user.avatarUrl = avatarUrl;
-        if (dob !== undefined) user.dob = dob;
-        if (gender !== undefined) user.gender = gender;
-        if (country !== undefined) user.country = country;
+        if (name && typeof name === 'string') {
+            const trimmed = name.trim();
+            const isPlaceholder = /^(user|arcanjo|guest user|amison user)$/i.test(trimmed);
+            // Only update name if it's a real custom name or if user has no name yet
+            if (trimmed.length > 0 && (!isPlaceholder || !user.name || /^(user|arcanjo|guest user|amison user)$/i.test(user.name))) {
+                user.name = trimmed;
+            }
+        }
+        if (avatarUrl !== undefined && avatarUrl !== "") user.avatarUrl = avatarUrl;
+        if (dob !== undefined && dob !== "") user.dob = dob;
+        if (gender !== undefined && gender !== "") user.gender = gender;
+        if (country !== undefined && country !== "") user.country = country;
         user.updatedAt = new Date();
 
         await user.save();
@@ -188,6 +193,10 @@ app.post('/api/user/update-profile', async (req, res) => {
         res.status(500).json({ success: false, error: e.message });
     }
 });
+
+// Mount MongoDB Friends Router (Follow/Followers/Friends)
+const friendRoutes = require('./friends');
+app.use('/api', friendRoutes);
 
 // Start Server
 server.listen(PORT, () => {
