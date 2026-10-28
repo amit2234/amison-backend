@@ -85,15 +85,30 @@ app.get('/api/users/search', async (req, res) => {
         const query = (req.query.query || '').trim();
         if (!query) return res.json({ users: [] });
 
-        const numId = Number(query) || 0;
-        const users = await User.find({
-            $or: [
-                { uid: query },
-                ...(numId > 0 ? [{ numericId: numId }] : []),
-                { numericId: { $regex: query, $options: 'i' } },
-                { name: { $regex: query, $options: 'i' } }
-            ]
-        }).limit(20).lean();
+        const numId = Number(query);
+        const orConditions = [
+            { uid: query },
+            { name: { $regex: query, $options: 'i' } }
+        ];
+
+        // Exact match on numeric ID (indexed, ultra-fast 1ms)
+        if (!isNaN(numId) && numId > 0) {
+            orConditions.push({ numericId: numId });
+        }
+
+        // Partial match on numeric ID if digits entered
+        if (/^\d+$/.test(query)) {
+            orConditions.push({
+                $expr: {
+                    $regexMatch: {
+                        input: { $toString: "$numericId" },
+                        regex: query
+                    }
+                }
+            });
+        }
+
+        const users = await User.find({ $or: orConditions }).limit(20).lean();
 
         return res.json({ users: users || [] });
     } catch (e) {
