@@ -46,6 +46,7 @@ const User = mongoose.model('User', userSchema);
 let walletLoaded = false;
 let newopLoaded = false;
 let messageLoaded = false;
+let roomLoaded = false;
 
 // Health check endpoint (for Instant Wakeup / Pre-Warm ping)
 app.get('/api/health', (req, res) => {
@@ -55,7 +56,8 @@ app.get('/api/health', (req, res) => {
         mongoReady: mongoose.connection.readyState === 1,
         walletLoaded,
         newopLoaded,
-        messageLoaded
+        messageLoaded,
+        roomLoaded
     });
 });
 
@@ -263,6 +265,21 @@ for (const candidate of ['./message', './messages', './Message', './Messages']) 
         app.use('/api/messages', messageRoutes);
         messageLoaded = true;
         console.log(`[Server] Loaded Message Router from ${candidate}`);
+        break;
+    } catch (e) {
+        if (e.code !== 'MODULE_NOT_FOUND') {
+            console.error(`[Server] Error loading ${candidate}:`, e.message);
+        }
+    }
+}
+
+// Mount Dedicated Room Router (MongoDB rooms collection permanently tied to user UID)
+for (const candidate of ['./room', './rooms', './Room', './Rooms']) {
+    try {
+        const roomRoutes = require(candidate);
+        app.use('/api/rooms', roomRoutes);
+        roomLoaded = true;
+        console.log(`[Server] Loaded Room Router from ${candidate}`);
         break;
     } catch (e) {
         if (e.code !== 'MODULE_NOT_FOUND') {
