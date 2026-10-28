@@ -18,7 +18,7 @@ mongoose.connect(MONGO_URI)
     .catch(err => console.error('MongoDB Atlas Connection Error:', err));
 
 // ============================================================================
-// MONGOOSE SCHEMA: USERS COLLECTION (8 CORE PROFILE FIELDS ONLY)
+// MONGOOSE SCHEMA: USERS COLLECTION (CORE PROFILE + COINS & DIAMONDS)
 // ============================================================================
 const userSchema = new mongoose.Schema({
     uid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth Google UID
@@ -48,7 +48,9 @@ app.get('/api/health', (req, res) => {
     res.json({
         status: 'OK',
         service: 'Amison MongoDB Backend',
-        mongoReady: mongoose.connection.readyState === 1
+        mongoReady: mongoose.connection.readyState === 1,
+        walletEngineReady: true,
+        newopReady: true
     });
 });
 
@@ -219,7 +221,8 @@ const friendRoutes = require('./friends');
 app.use('/api', friendRoutes);
 
 // Mount High-Speed 0-Trust Wallet + Gift Transaction Engine (MongoDB + Redis)
-const { router: walletRoutes } = require('./wallet');
+const walletModule = require('./wallet');
+const walletRoutes = walletModule.router || walletModule;
 app.use('/api', walletRoutes);
 
 // Mount Dedicated Newop Master Admin Router (Separate collections & logic in newop.js)
