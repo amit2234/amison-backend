@@ -56,10 +56,6 @@ function withUserLock(uid, fn) {
 // ============================================================================
 // REDIS ATOMIC LUA SCRIPTS (0ms Lock-Free Execution)
 // ============================================================================
-// KEYS[1]: wallet:coins:{senderUid}
-// KEYS[2]: wallet:diamonds:{receiverUid}
-// KEYS[3]: wallet:tx:{txId}
-// ARGV[1]: coinCost, ARGV[2]: diamondReward, ARGV[3]: ttlSeconds
 const LUA_ATOMIC_GIFT = `
 if redis.call("EXISTS", KEYS[3]) == 1 then
     return {-2, tonumber(redis.call("GET", KEYS[1]) or "0"), tonumber(redis.call("GET", KEYS[2]) or "0")}
@@ -143,9 +139,9 @@ async function resolveUserByUidOrNumericId(User, rawId) {
  * Checks 0-Trust Idempotency to block Replay Attacks / duplicate rapid clicks
  */
 function checkAndMarkIdempotency(txId) {
-    if (!txId) return true; // will generate a fresh server txId
+    if (!txId) return true;
     if (processedTxIds.has(txId)) {
-        return false; // Duplicate replay request blocked!
+        return false;
     }
     processedTxIds.set(txId, Date.now());
     return true;
@@ -168,7 +164,6 @@ router.get('/wallet/:uid', async (req, res) => {
         const coins = Math.max(0, Number(user.coins) || 0);
         const diamonds = Math.max(0, Number(user.diamonds) || 0);
 
-        // Warm Redis cache in background
         syncRedisWallet(user.uid, coins, diamonds);
 
         return res.json({
@@ -208,15 +203,13 @@ router.post('/gift/send', async (req, res) => {
             return res.status(400).json({ success: false, message: 'Missing senderId or receiverId' });
         }
 
-        // 0-Trust Validation: Cost & multiplier must be strictly positive integers
         const safeMultiplier = Math.max(1, Math.min(9999, Math.floor(Number(multiplier) || 1)));
         const rawCost = Math.floor(Number(giftCost) || 0);
         if (rawCost <= 0) {
             return res.status(400).json({ success: false, message: 'Invalid gift cost (0-Trust rejected)' });
         }
 
-        const totalCoinCost = rawCost; // giftCost passed from client already includes multiplier or single cost
-        // 0-Trust Server-Side Diamond Calculation (70% conversion standard)
+        const totalCoinCost = rawCost;
         const diamondReward = Math.max(1, Math.floor((totalCoinCost * 70) / 100));
 
         const txId = (clientTxId && String(clientTxId).trim()) || crypto.randomUUID();
@@ -233,7 +226,6 @@ router.post('/gift/send', async (req, res) => {
         const canonicalReceiverUid = receiverDoc ? receiverDoc.uid : String(receiverId).trim();
 
         const result = await withUserLock(canonicalSenderUid, async () => {
-            // Optional Redis Lua Fast-Path
             if (redisClient && redisClient.status === 'ready') {
                 try {
                     const luaRes = await redisClient.eval(
@@ -258,8 +250,6 @@ router.post('/gift/send', async (req, res) => {
                 }
             }
 
-            // MongoDB WiredTiger Document-Level Atomic Deduction:
-            // Only deducts if coins >= totalCoinCost (100% impossible to go negative or double-spend!)
             const isSelfGift = canonicalSenderUid === canonicalReceiverUid;
             const updateOps = isSelfGift
                 ? {
@@ -304,7 +294,6 @@ router.post('/gift/send', async (req, res) => {
 
             await syncRedisWallet(canonicalSenderUid, updatedSender.coins, updatedSender.diamonds);
 
-            // Sync with newop_users collection so Newop Admin Panel stays 100% in sync
             const NewopUserControl = mongoose.models.NewopUserControl;
             if (NewopUserControl) {
                 await NewopUserControl.findOneAndUpdate(
@@ -321,7 +310,6 @@ router.post('/gift/send', async (req, res) => {
                 }
             }
 
-            // Write immutable Passbook Ledger record asynchronously
             WalletTransaction.create({
                 txId,
                 type: 'GIFT_SEND',
@@ -425,7 +413,6 @@ router.post('/gift/send-multi', async (req, res) => {
                 return { ok: false, remainingCoins: latest ? (Number(latest.coins) || 0) : 0 };
             }
 
-            // Credit each recipient atomically
             for (const rawRecId of cleanRecipients) {
                 const recDoc = await resolveUserByUidOrNumericId(User, rawRecId);
                 if (recDoc) {
@@ -481,4 +468,155 @@ router.post('/gift/send-multi', async (req, res) => {
 
 // ============================================================================
 // 4. POST /api/wallet/convert
-// 0-Trust Atomic Conversion: 
+// 0-Trust Atomic Conversion: Diamonds -> Gold Coins (Me -> Wallet -> Convert)
+// ============================================================================
+router.post('/wallet/convert', async (req, res) => {
+    try {
+        const User = getCoreUserModel();
+        if (!User) return res.status(500).json({ success: false, message: 'Server database initializing' });
+
+        const { uid, diamondsToConvert, txId: clientTxId } = req.body;
+        const diamonds = Math.floor(Number(diamondsToConvert) || 0);
+        if (!uid || diamonds <= 0) {
+            return res.status(400).json({ success: false, message: 'Invalid conversion amount' });
+        }
+
+        const txId = (clientTxId && String(clientTxId).trim()) || crypto.randomUUID();
+        if (!checkAndMarkIdempotency(txId)) {
+            return res.status(409).json({ success: false, message: 'Duplicate conversion request blocked' });
+        }
+
+        const userDoc = await resolveUserByUidOrNumericId(User, uid);
+        if (!userDoc) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const coinsGained = Math.max(1, Math.floor((diamonds * 70) / 100));
+
+        const updatedUser = await withUserLock(userDoc.uid, async () => {
+            return await User.findOneAndUpdate(
+                { uid: userDoc.uid, diamonds: { $gte: diamonds } },
+                {
+                    $inc: { diamonds: -diamonds, coins: coinsGained },
+                    $set: { updatedAt: new Date() }
+                },
+                { new: true }
+            ).lean();
+        });
+
+        if (!updatedUser) {
+            return res.status(400).json({ success: false, message: 'Insufficient Diamonds balance' });
+        }
+
+        await syncRedisWallet(updatedUser.uid, updatedUser.coins, updatedUser.diamonds);
+
+        const NewopUserControl = mongoose.models.NewopUserControl;
+        if (NewopUserControl) {
+            await NewopUserControl.findOneAndUpdate(
+                { uid: updatedUser.uid },
+                { $set: { goldCoin: updatedUser.coins, diamond: updatedUser.diamonds, updatedAt: new Date() } },
+                { upsert: true }
+            );
+        }
+
+        WalletTransaction.create({
+            txId,
+            type: 'CONVERT_DIAMOND_TO_COIN',
+            senderUid: updatedUser.uid,
+            receiverUid: updatedUser.uid,
+            coinsDelta: coinsGained,
+            diamondsDelta: -diamonds,
+            senderCoinsAfter: Number(updatedUser.coins) || 0,
+            senderDiamondsAfter: Number(updatedUser.diamonds) || 0
+        }).catch(() => {});
+
+        return res.json({
+            success: true,
+            transactionId: txId,
+            coins: Number(updatedUser.coins) || 0,
+            diamonds: Number(updatedUser.diamonds) || 0,
+            coinsGained
+        });
+    } catch (e) {
+        console.error('[Wallet Engine] POST /wallet/convert error:', e);
+        return res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// ============================================================================
+// 5. POST /api/wallet/withdraw
+// 0-Trust Atomic Diamond Withdrawal (Me -> Wallet -> Withdraw)
+// ============================================================================
+router.post('/wallet/withdraw', async (req, res) => {
+    try {
+        const User = getCoreUserModel();
+        if (!User) return res.status(500).json({ success: false, message: 'Server database initializing' });
+
+        const { uid, diamondsToWithdraw, method = 'UPI', txId: clientTxId } = req.body;
+        const diamonds = Math.floor(Number(diamondsToWithdraw) || 0);
+        if (!uid || diamonds <= 0) {
+            return res.status(400).json({ success: false, message: 'Invalid withdrawal amount' });
+        }
+
+        const txId = (clientTxId && String(clientTxId).trim()) || crypto.randomUUID();
+        if (!checkAndMarkIdempotency(txId)) {
+            return res.status(409).json({ success: false, message: 'Duplicate withdrawal request blocked' });
+        }
+
+        const userDoc = await resolveUserByUidOrNumericId(User, uid);
+        if (!userDoc) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        const updatedUser = await withUserLock(userDoc.uid, async () => {
+            return await User.findOneAndUpdate(
+                { uid: userDoc.uid, diamonds: { $gte: diamonds } },
+                {
+                    $inc: { diamonds: -diamonds },
+                    $set: { updatedAt: new Date() }
+                },
+                { new: true }
+            ).lean();
+        });
+
+        if (!updatedUser) {
+            return res.status(400).json({ success: false, message: 'Insufficient Diamonds balance' });
+        }
+
+        await syncRedisWallet(updatedUser.uid, updatedUser.coins, updatedUser.diamonds);
+
+        const NewopUserControl = mongoose.models.NewopUserControl;
+        if (NewopUserControl) {
+            await NewopUserControl.findOneAndUpdate(
+                { uid: updatedUser.uid },
+                { $set: { goldCoin: updatedUser.coins, diamond: updatedUser.diamonds, updatedAt: new Date() } },
+                { upsert: true }
+            );
+        }
+
+        WalletTransaction.create({
+            txId,
+            type: 'WITHDRAW_DIAMOND',
+            senderUid: updatedUser.uid,
+            coinsDelta: 0,
+            diamondsDelta: -diamonds,
+            senderCoinsAfter: Number(updatedUser.coins) || 0,
+            senderDiamondsAfter: Number(updatedUser.diamonds) || 0
+        }).catch(() => {});
+
+        return res.json({
+            success: true,
+            transactionId: txId,
+            coins: Number(updatedUser.coins) || 0,
+            diamonds: Number(updatedUser.diamonds) || 0
+        });
+    } catch (e) {
+        console.error('[Wallet Engine] POST /wallet/withdraw error:', e);
+        return res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+module.exports = {
+    router,
+    syncRedisWallet
+};
