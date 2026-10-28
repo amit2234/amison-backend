@@ -87,8 +87,7 @@ app.get('/api/users/search', async (req, res) => {
 
         const numId = Number(query);
         const orConditions = [
-            { uid: query },
-            { name: { $regex: query, $options: 'i' } }
+            { uid: query }
         ];
 
         // Exact match on numeric ID (indexed, ultra-fast 1ms)
