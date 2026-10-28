@@ -18,7 +18,7 @@ mongoose.connect(MONGO_URI)
     .catch(err => console.error('MongoDB Atlas Connection Error:', err));
 
 // ============================================================================
-// MONGOOSE SCHEMA: USERS COLLECTION (CORE PROFILE + COINS & DIAMONDS)
+// MONGOOSE SCHEMA: USERS COLLECTION (8 CORE PROFILE FIELDS ONLY)
 // ============================================================================
 const userSchema = new mongoose.Schema({
     uid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth Google UID
@@ -43,14 +43,19 @@ const User = mongoose.model('User', userSchema);
 // API ENDPOINTS
 // ============================================================================
 
+let walletLoaded = false;
+let newopLoaded = false;
+let messageLoaded = false;
+
 // Health check endpoint (for Instant Wakeup / Pre-Warm ping)
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'OK',
-        service: 'Amison MongoDB Backend',
+        service: 'Amison MongoDB Backend v2',
         mongoReady: mongoose.connection.readyState === 1,
-        walletEngineReady: true,
-        newopReady: true
+        walletLoaded,
+        newopLoaded,
+        messageLoaded
     });
 });
 
@@ -221,13 +226,50 @@ const friendRoutes = require('./friends');
 app.use('/api', friendRoutes);
 
 // Mount High-Speed 0-Trust Wallet + Gift Transaction Engine (MongoDB + Redis)
-const walletModule = require('./wallet');
-const walletRoutes = walletModule.router || walletModule;
-app.use('/api', walletRoutes);
+for (const candidate of ['./wallet', './wallets', './Wallet', './Wallets']) {
+    try {
+        const mod = require(candidate);
+        const walletRoutes = mod.router || mod;
+        app.use('/api', walletRoutes);
+        walletLoaded = true;
+        console.log(`[Server] Loaded Wallet Engine from ${candidate}`);
+        break;
+    } catch (e) {
+        if (e.code !== 'MODULE_NOT_FOUND') {
+            console.error(`[Server] Error loading ${candidate}:`, e.message);
+        }
+    }
+}
 
 // Mount Dedicated Newop Master Admin Router (Separate collections & logic in newop.js)
-const newopRoutes = require('./newop');
-app.use('/api/newop', newopRoutes);
+for (const candidate of ['./newop', './Newop', './newops', './Newops']) {
+    try {
+        const newopRoutes = require(candidate);
+        app.use('/api/newop', newopRoutes);
+        newopLoaded = true;
+        console.log(`[Server] Loaded Newop Router from ${candidate}`);
+        break;
+    } catch (e) {
+        if (e.code !== 'MODULE_NOT_FOUND') {
+            console.error(`[Server] Error loading ${candidate}:`, e.message);
+        }
+    }
+}
+
+// Mount Dedicated High-Speed Message Router (MongoDB direct_conversations + direct_messages + Redis + Zego Chat)
+for (const candidate of ['./message', './messages', './Message', './Messages']) {
+    try {
+        const messageRoutes = require(candidate);
+        app.use('/api/messages', messageRoutes);
+        messageLoaded = true;
+        console.log(`[Server] Loaded Message Router from ${candidate}`);
+        break;
+    } catch (e) {
+        if (e.code !== 'MODULE_NOT_FOUND') {
+            console.error(`[Server] Error loading ${candidate}:`, e.message);
+        }
+    }
+}
 
 // Start Server
 server.listen(PORT, () => {
