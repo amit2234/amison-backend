@@ -6,7 +6,8 @@ const router = express.Router();
 // MONGOOSE SCHEMA: ROOMS COLLECTION (Permanent link with User UID - 6-Digit ID)
 // ============================================================================
 const roomSchema = new mongoose.Schema({
-    ownerUid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth UID / User A UID
+    roomId: { type: String, required: true, unique: true, index: true }, // Strictly equal to ownerUid for permanent 1:1 link
+    ownerUid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth UID
     displayRoomId: { type: String, required: true, unique: true, index: true }, // Exact 6-digit room display ID (e.g., "100251")
     roomName: { type: String, required: true, trim: true }, // User entered room name
     roomPhotoUrl: { type: String, default: "" }, // Cloudinary room profile photo URL
@@ -21,13 +22,9 @@ const roomSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now }
 }, { collection: 'rooms' });
 
-roomSchema.index({ ownerUid: 1, displayRoomId: 1 });
+roomSchema.index({ ownerUid: 1, roomId: 1, displayRoomId: 1 });
 
 const Room = mongoose.models.Room || mongoose.model('Room', roomSchema);
-
-// ============================================================================
-// API ENDPOINTS (/api/rooms/*)
-// ============================================================================
 
 // Helper to generate unique 6-digit display ID (e.g. 100251)
 async function generateUnique6DigitId() {
@@ -41,6 +38,10 @@ async function generateUnique6DigitId() {
     return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
+// ============================================================================
+// API ENDPOINTS (/api/rooms/*)
+// ============================================================================
+
 // 1. GET /api/rooms/owner/:uid: Fetch or auto-ensure User's permanent room
 router.get('/owner/:uid', async (req, res) => {
     try {
@@ -49,10 +50,11 @@ router.get('/owner/:uid', async (req, res) => {
             return res.status(400).json({ success: false, error: 'Missing owner UID' });
         }
 
-        let room = await Room.findOne({ ownerUid: uid }).lean();
+        let room = await Room.findOne({ $or: [{ ownerUid: uid }, { roomId: uid }] }).lean();
         if (!room) {
             const sixDigitId = await generateUnique6DigitId();
-            room = await Room.create({
+            const newRoomDoc = await Room.create({
+                roomId: uid,
                 ownerUid: uid,
                 displayRoomId: sixDigitId,
                 roomName: "My Live Voice Room",
@@ -60,7 +62,10 @@ router.get('/owner/:uid', async (req, res) => {
                 category: "Voice Party",
                 announcement: "Welcome to my room!"
             });
-            room = room.toObject();
+            room = newRoomDoc.toObject();
+        } else if (!room.roomId) {
+            await Room.updateOne({ _id: room._id }, { $set: { roomId: uid } });
+            room.roomId = uid;
         }
 
         return res.json({ success: true, room });
@@ -92,10 +97,12 @@ router.post('/create', async (req, res) => {
         }
 
         // Check if room already exists for this ownerUid
-        let room = await Room.findOne({ ownerUid: cleanUid });
+        let room = await Room.findOne({ $or: [{ ownerUid: cleanUid }, { roomId: cleanUid }] });
 
         if (room) {
-            // Update existing room while keeping the same 6-digit displayRoomId and ownerUid permanent link
+            // Update existing room while keeping the same permanent 6-digit displayRoomId & ownerUid
+            room.roomId = cleanUid;
+            room.ownerUid = cleanUid;
             room.roomName = roomName.trim();
             if (roomPhotoUrl !== undefined) room.roomPhotoUrl = roomPhotoUrl;
             if (category) room.category = category;
@@ -105,9 +112,10 @@ router.post('/create', async (req, res) => {
             room.updatedAt = new Date();
             await room.save();
         } else {
-            // Create new room with 6-digit displayRoomId (e.g. 100251) permanently linked to ownerUid
+            // Create new room with roomId = ownerUid and 6-digit displayRoomId
             const sixDigitId = await generateUnique6DigitId();
             room = await Room.create({
+                roomId: cleanUid,
                 ownerUid: cleanUid,
                 displayRoomId: sixDigitId,
                 roomName: roomName.trim(),
@@ -127,7 +135,7 @@ router.post('/create', async (req, res) => {
     }
 });
 
-// Alias for backwards compatibility with create-or-update
+// Alias for backwards compatibility
 router.post('/create-or-update', async (req, res) => {
     req.url = '/create';
     return router.handle(req, res);
@@ -147,7 +155,7 @@ router.get('/explore', async (req, res) => {
     }
 });
 
-// 4. GET /api/rooms/:id: Fetch room by displayRoomId or ownerUid
+// 4. GET /api/rooms/:id: Fetch room by 6-digit displayRoomId or ownerUid
 router.get('/:id', async (req, res) => {
     try {
         const id = String(req.params.id || '').trim();
