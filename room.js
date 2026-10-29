@@ -42,7 +42,7 @@ async function generateUnique6DigitId() {
 // API ENDPOINTS (/api/rooms/*)
 // ============================================================================
 
-// 1. GET /api/rooms/owner/:uid: Fetch or auto-ensure User's permanent room
+// 1. GET /api/rooms/owner/:uid: Fetch User's permanent room
 router.get('/owner/:uid', async (req, res) => {
     try {
         const uid = String(req.params.uid || '').trim();
@@ -52,23 +52,14 @@ router.get('/owner/:uid', async (req, res) => {
 
         let room = await Room.findOne({ $or: [{ ownerUid: uid }, { roomId: uid }] }).lean();
         if (!room) {
-            const sixDigitId = await generateUnique6DigitId();
-            const newRoomDoc = await Room.create({
-                roomId: uid,
-                ownerUid: uid,
-                displayRoomId: sixDigitId,
-                roomName: "My Live Voice Room",
-                roomPhotoUrl: "",
-                category: "Voice Party",
-                announcement: "Welcome to my room!"
-            });
-            room = newRoomDoc.toObject();
-        } else if (!room.roomId) {
+            return res.json({ success: true, exists: false, room: null });
+        }
+        if (!room.roomId) {
             await Room.updateOne({ _id: room._id }, { $set: { roomId: uid } });
             room.roomId = uid;
         }
 
-        return res.json({ success: true, room });
+        return res.json({ success: true, exists: true, room });
     } catch (e) {
         console.error('[Room Engine] Fetch owner room error:', e);
         return res.status(500).json({ success: false, error: e.message });
