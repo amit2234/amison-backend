@@ -288,6 +288,20 @@ for (const candidate of ['./room', './rooms', './Room', './Rooms']) {
     }
 }
 
+// Mount Dedicated Real-Time Chat WebSocket Server (/ws/chat)
+for (const candidate of ['./chatSocket', './chatsocket', './ChatSocket']) {
+    try {
+        const setupChatSocket = require(candidate);
+        setupChatSocket(server);
+        console.log(`[Server] Loaded Chat WebSocket from ${candidate}`);
+        break;
+    } catch (e) {
+        if (e.code !== 'MODULE_NOT_FOUND') {
+            console.error(`[Server] Error loading ${candidate}:`, e.message);
+        }
+    }
+}
+
 // Start Server
 server.listen(PORT, () => {
     console.log(`Amison Backend Server running on port ${PORT}`);
