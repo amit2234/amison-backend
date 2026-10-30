@@ -86,10 +86,16 @@ function setupChatSocket(server) {
             try {
                 const data = JSON.parse(rawMessage.toString());
 
-                // 1. User joins conversation room
-                if (data.type === 'dm:join') {
-                    currentUserId = data.userId ? String(data.userId).trim() : null;
-                    currentConversationId = data.conversationId;
+                // 0. General user registration / association
+                if (data.userId && !currentUserId) {
+                    currentUserId = String(data.userId).trim();
+                    onlineUsers.set(currentUserId, ws);
+                }
+
+                // 1. User joins conversation room or registers
+                if (data.type === 'dm:join' || data.type === 'user:register' || data.type === 'auth:register') {
+                    currentUserId = data.userId ? String(data.userId).trim() : currentUserId;
+                    currentConversationId = data.conversationId || currentConversationId;
                     if (currentUserId) {
                         onlineUsers.set(currentUserId, ws);
                     }
@@ -437,4 +443,43 @@ function setupChatSocket(server) {
                 }
 
                 const roomStatePacket = JSON.stringify({
-                    type: 'room:state_updat
+                    type: 'room:state_update',
+                    roomId: currentRoomId,
+                    heatScore,
+                    onlineCount,
+                    participants: Array.from(roomParticipants.values())
+                });
+
+                wss.clients.forEach((client) => {
+                    if (client.readyState === WebSocket.OPEN) {
+                        client.send(roomStatePacket);
+                    }
+                });
+
+                await broadcastPopularRooms(wss);
+            }
+        });
+
+        ws.on('error', (err) => {
+            console.warn('[ChatSocket] Socket warning:', err.message);
+        });
+    });
+}
+
+/**
+ * Direct real-time unicast to a specific user UID's connected WebSocket
+ */
+function emitToUser(userId, packet) {
+    if (!userId) return false;
+    const cleanId = String(userId).trim();
+    const ws = onlineUsers.get(cleanId);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(packet));
+        return true;
+    }
+    return false;
+}
+
+setupChatSocket.emitToUser = emitToUser;
+
+module.exports = setupChatSocket;
