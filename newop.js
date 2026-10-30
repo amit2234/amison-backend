@@ -3,9 +3,255 @@ const mongoose = require('mongoose');
 const router = express.Router();
 
 // ============================================================================
+// MONGOOSE SCHEMA: NEWOP ADMIN PERMISSIONS (newop_admins)
+// Dedicated collection to lock Newop access strictly to authorized Firebase Auth UIDs
+// ============================================================================
+const newopAdminSchema = new mongoose.Schema({
+    uid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth UID
+    adminName: { type: String, default: 'Super Master' },
+    role: { type: String, enum: ['super_admin', 'super_master', 'admin'], default: 'super_admin' },
+    passwordHash: { type: String, default: '123456' }, // Root access password
+    isActive: { type: Boolean, default: true, index: true },
+    grantedBy: { type: String, default: 'owner' },
+    grantedAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now }
+}, { collection: 'newop_admins' });
+
+const NewopAdmin = mongoose.models.NewopAdmin || mongoose.model('NewopAdmin', newopAdminSchema);
+
+// Helper to get the main User model (from server.js)
+const getCoreUserModel = () => mongoose.models.User;
+
+/**
+ * Checks if a user's permanent Auth UID has active Newop permissions
+ */
+async function isAuthorizedNewopAdmin(uid) {
+    if (!uid || typeof uid !== 'string') return false;
+    const cleanUid = uid.trim();
+    if (!cleanUid) return false;
+
+    // 1. Check newop_admins collection in MongoDB Atlas
+    const admin = await NewopAdmin.findOne({ uid: cleanUid, isActive: true }).lean();
+    if (admin) return true;
+
+    // 2. Check Core User role for super_admin / super_master
+    const User = getCoreUserModel();
+    if (User) {
+        const coreUser = await User.findOne({ uid: cleanUid }).lean();
+        if (coreUser && (coreUser.role === 'super_admin' || coreUser.role === 'super_master')) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Zero-Trust Backend Middleware: Rejects any unauthorized request with HTTP 403 Forbidden.
+ * Modded APKs or unauthorized users cannot access any Newop data or functions.
+ */
+async function requireNewopAdmin(req, res, next) {
+    try {
+        const callerUid = req.headers['x-user-uid'] ||
+            (req.headers['authorization'] && req.headers['authorization'].replace(/^Bearer\s+/i, '').trim()) ||
+            req.body?.callerUid ||
+            req.query?.callerUid;
+
+        if (!callerUid) {
+            return res.status(403).json({
+                success: false,
+                error: 'Access denied: UID header missing. Newop is strictly locked from backend.'
+            });
+        }
+
+        const isAuth = await isAuthorizedNewopAdmin(callerUid);
+        if (!isAuth) {
+            return res.status(403).json({
+                success: false,
+                error: 'Access denied: This user UID does not have backend permissions for Newop.'
+            });
+        }
+
+        req.callerUid = String(callerUid).trim();
+        next();
+    } catch (e) {
+        console.error('[Newop Auth] requireNewopAdmin error:', e);
+        res.status(500).json({ success: false, error: 'Internal server authorization error' });
+    }
+}
+
+// ============================================================================
+// DYNAMIC ACCESS & AUTHENTICATION ENDPOINTS
+// ============================================================================
+
+// A. GET /api/newop/check-access/:uid
+// Returns whether the given user UID is authorized for Newop (used to load menu dynamically)
+router.get('/check-access/:uid', async (req, res) => {
+    try {
+        const { uid } = req.params;
+        if (!uid) return res.json({ success: true, hasAccess: false, title: '' });
+
+        const cleanUid = String(uid).trim();
+        const hasAccess = await isAuthorizedNewopAdmin(cleanUid);
+
+        return res.json({
+            success: true,
+            hasAccess,
+            title: hasAccess ? 'Newop - Super master' : '',
+            role: hasAccess ? 'super_admin' : 'user'
+        });
+    } catch (e) {
+        console.error('[Newop Auth] check-access error:', e);
+        return res.status(500).json({ success: false, hasAccess: false, error: e.message });
+    }
+});
+
+// B. POST /api/newop/auth/verify
+// Verifies user password before unlocking Newop screen
+router.post('/auth/verify', async (req, res) => {
+    try {
+        const { uid, password } = req.body;
+        if (!uid || !password) {
+            return res.status(400).json({ success: false, error: 'UID and Password are required' });
+        }
+
+        const cleanUid = String(uid).trim();
+        const isAuth = await isAuthorizedNewopAdmin(cleanUid);
+        if (!isAuth) {
+            return res.status(403).json({ success: false, error: 'Access denied: User UID is not authorized in backend.' });
+        }
+
+        const admin = await NewopAdmin.findOne({ uid: cleanUid, isActive: true }).lean();
+        const expectedPassword = admin?.passwordHash || '123456';
+
+        if (String(password).trim() !== expectedPassword.trim()) {
+            return res.status(401).json({ success: false, error: 'Incorrect password. Default is 123456.' });
+        }
+
+        return res.json({
+            success: true,
+            message: 'Authenticated successfully',
+            role: admin?.role || 'super_admin'
+        });
+    } catch (e) {
+        console.error('[Newop Auth] verify error:', e);
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// C. POST /api/newop/admin/grant
+// Grants Newop access to a permanent Firebase Auth UID in MongoDB Atlas
+router.post('/admin/grant', async (req, res) => {
+    try {
+        const { masterKey, callerUid, targetUid, adminName, role, password } = req.body;
+        if (!targetUid) {
+            return res.status(400).json({ success: false, error: 'targetUid is required' });
+        }
+
+        const cleanTargetUid = String(targetUid).trim();
+        const isMaster = masterKey === (process.env.NEWOP_MASTER_KEY || 'amison_super_owner_2026');
+        const isCallerAdmin = callerUid ? await isAuthorizedNewopAdmin(callerUid) : false;
+
+        if (!isMaster && !isCallerAdmin) {
+            return res.status(403).json({ success: false, error: 'Unauthorized to grant Newop access' });
+        }
+
+        const adminDoc = await NewopAdmin.findOneAndUpdate(
+            { uid: cleanTargetUid },
+            {
+                $set: {
+                    uid: cleanTargetUid,
+                    adminName: adminName || 'Super Master',
+                    role: role || 'super_admin',
+                    passwordHash: password || '123456',
+                    isActive: true,
+                    grantedBy: callerUid || 'owner',
+                    updatedAt: new Date()
+                },
+                $setOnInsert: { grantedAt: new Date() }
+            },
+            { upsert: true, new: true }
+        ).lean();
+
+        // Emit real-time notification to user via WebSocket if online
+        try {
+            const chatSocket = require('./chatSocket');
+            if (chatSocket && typeof chatSocket.emitToUser === 'function') {
+                chatSocket.emitToUser(cleanTargetUid, {
+                    type: 'user:newop_access_changed',
+                    hasAccess: true,
+                    title: 'Newop - Super master'
+                });
+            }
+        } catch (_) {}
+
+        return res.json({
+            success: true,
+            message: `Newop access successfully granted to UID: ${cleanTargetUid}`,
+            admin: adminDoc
+        });
+    } catch (e) {
+        console.error('[Newop Auth] grant error:', e);
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// D. POST /api/newop/admin/revoke
+// Revokes Newop access from a UID
+router.post('/admin/revoke', async (req, res) => {
+    try {
+        const { masterKey, callerUid, targetUid } = req.body;
+        if (!targetUid) {
+            return res.status(400).json({ success: false, error: 'targetUid is required' });
+        }
+
+        const cleanTargetUid = String(targetUid).trim();
+        const isMaster = masterKey === (process.env.NEWOP_MASTER_KEY || 'amison_super_owner_2026');
+        const isCallerAdmin = callerUid ? await isAuthorizedNewopAdmin(callerUid) : false;
+
+        if (!isMaster && !isCallerAdmin) {
+            return res.status(403).json({ success: false, error: 'Unauthorized to revoke Newop access' });
+        }
+
+        await NewopAdmin.updateOne(
+            { uid: cleanTargetUid },
+            { $set: { isActive: false, updatedAt: new Date() } }
+        );
+
+        // Emit real-time notification to user via WebSocket
+        try {
+            const chatSocket = require('./chatSocket');
+            if (chatSocket && typeof chatSocket.emitToUser === 'function') {
+                chatSocket.emitToUser(cleanTargetUid, {
+                    type: 'user:newop_access_changed',
+                    hasAccess: false
+                });
+            }
+        } catch (_) {}
+
+        return res.json({
+            success: true,
+            message: `Newop access revoked from UID: ${cleanTargetUid}`
+        });
+    } catch (e) {
+        console.error('[Newop Auth] revoke error:', e);
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// E. GET /api/newop/admin/list
+// Lists all authorized Newop admin UIDs
+router.get('/admin/list', requireNewopAdmin, async (req, res) => {
+    try {
+        const admins = await NewopAdmin.find({ isActive: true }).lean();
+        return res.json({ success: true, admins });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// ============================================================================
 // MONGOOSE SCHEMA: NEWOP USER MANAGEMENT COLLECTION (newop_users)
-// Separate collection in MongoDB Atlas specifically for Newop -> Slide Menu -> User option
-// Stores Ban status, Reset photo flag, Gold coin, Diamond, Room ID, Agency, Family, etc.
 // ============================================================================
 const newopUserControlSchema = new mongoose.Schema({
     uid: { type: String, required: true, unique: true, index: true }, // Permanent Auth UID (UserDocid)
@@ -27,16 +273,13 @@ const newopUserControlSchema = new mongoose.Schema({
 
 const NewopUserControl = mongoose.models.NewopUserControl || mongoose.model('NewopUserControl', newopUserControlSchema);
 
-// Helper to get the main User model (from server.js)
-const getCoreUserModel = () => mongoose.models.User;
-
 // ============================================================================
-// NEWOP -> SLIDE MENU -> USER OPTION ENDPOINTS
+// NEWOP -> SLIDE MENU -> USER OPTION ENDPOINTS (Protected with requireNewopAdmin)
 // ============================================================================
 
 // 1. GET /api/newop/users
 // Used for: All tab, New tab (Daily/Weekly/Monthly), Banned tab, and Search User UID
-router.get('/users', async (req, res) => {
+router.get('/users', requireNewopAdmin, async (req, res) => {
     try {
         const User = getCoreUserModel();
         if (!User) {
@@ -122,7 +365,7 @@ router.get('/users', async (req, res) => {
 
 // 2. POST /api/newop/user/ban
 // Used for: Banned toggle switch on User Card (Ban with reason & duration, or Unban)
-router.post('/user/ban', async (req, res) => {
+router.post('/user/ban', requireNewopAdmin, async (req, res) => {
     try {
         const { uid, isBlocked, banReason, banDuration } = req.body;
         if (!uid) return res.status(400).json({ success: false, error: 'Missing UID' });
@@ -151,7 +394,7 @@ router.post('/user/ban', async (req, res) => {
 
 // 3. POST /api/newop/user/update
 // Used for: View info -> Edit button (ID, Gender, Cuntry, Gold coin, Diamond, Room id, Google)
-router.post('/user/update', async (req, res) => {
+router.post('/user/update', requireNewopAdmin, async (req, res) => {
     try {
         const { uid, numericId, gender, country, goldCoin, diamond, roomId, googleEmail } = req.body;
         if (!uid) return res.status(400).json({ success: false, error: 'Missing UID' });
@@ -210,7 +453,7 @@ router.post('/user/update', async (req, res) => {
 
 // 4. POST /api/newop/user/reset-photos
 // Used for: View info -> Reset button (Resets Profile Photo & Background Photo to default No DP)
-router.post('/user/reset-photos', async (req, res) => {
+router.post('/user/reset-photos', requireNewopAdmin, async (req, res) => {
     try {
         const { uid } = req.body;
         if (!uid) return res.status(400).json({ success: false, error: 'Missing UID' });
@@ -239,9 +482,4 @@ router.post('/user/reset-photos', async (req, res) => {
 
         return res.json({ success: true, control });
     } catch (e) {
-        console.error('[Newop MongoDB] Reset photos error:', e);
-        res.status(500).json({ success: false, error: e.message });
-    }
-});
-
-module.exports = router;
+        console.error('[
