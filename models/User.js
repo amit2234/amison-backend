@@ -6,8 +6,8 @@ const mongoose = require('mongoose');
 // 9-digit numericId is purely for display (numericId / displayUserId)
 // ============================================================================
 const userSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth Google UID
-    numericId: { type: Number, required: true, unique: true, index: true }, // 9-digit unique public display ID
+    uid: { type: String, required: true, unique: true }, // Permanent Firebase Auth Google UID
+    numericId: { type: Number, required: true, unique: true }, // 9-digit unique public display ID
     name: { type: String, required: true, trim: true }, // User Display Name
     avatarUrl: { type: String, default: "" }, // Profile Photo URL (Cloudinary)
     dob: { type: String, default: "" }, // Date of Birth (YYYY-MM-DD)
@@ -23,7 +23,6 @@ const userSchema = new mongoose.Schema({
 });
 
 userSchema.index({ uid: 1, email: 1 });
-userSchema.index({ numericId: 1 });
 
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
