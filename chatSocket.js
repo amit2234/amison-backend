@@ -433,5 +433,5 @@ function setupChatSocket(server) {
 
             } catch (err) {
                 console.error('[ChatSocket] Error parsing message:', err.message);
-            }
-            
+                        }
+                                
