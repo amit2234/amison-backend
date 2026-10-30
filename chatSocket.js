@@ -82,6 +82,19 @@ function setupChatSocket(server) {
         let currentConversationId = null;
         let currentRoomId = null;
 
+        try {
+            const urlObj = new URL(req.url, 'http://localhost');
+            const queryUserId = urlObj.searchParams.get('userId');
+            const headerUserId = req.headers['x-user-id'];
+            currentUserId = (queryUserId || headerUserId || '').trim();
+            if (currentUserId) {
+                onlineUsers.set(currentUserId, ws);
+                console.log(`[ChatSocket] User connected & registered instantly: ${currentUserId}`);
+            }
+        } catch (e) {
+            console.error('[ChatSocket] Error parsing connection request:', e.message);
+        }
+
         ws.on('message', async (rawMessage) => {
             try {
                 const data = JSON.parse(rawMessage.toString());
@@ -421,65 +434,4 @@ function setupChatSocket(server) {
             } catch (err) {
                 console.error('[ChatSocket] Error parsing message:', err.message);
             }
-        });
-
-        ws.on('close', async () => {
-            if (currentUserId) {
-                onlineUsers.delete(currentUserId);
-            }
-            if (currentRoomId && currentUserId && activeRooms.has(currentRoomId)) {
-                const roomParticipants = activeRooms.get(currentRoomId);
-                roomParticipants.delete(currentUserId);
-
-                const heatScore = calculateRoomHeat(roomParticipants);
-                const onlineCount = roomParticipants.size;
-
-                const Room = mongoose.models.Room;
-                if (Room) {
-                    await Room.updateOne(
-                        { $or: [{ roomId: currentRoomId }, { ownerUid: currentRoomId }, { displayRoomId: currentRoomId }] },
-                        { $set: { heatScore, onlineCount, updatedAt: new Date() } }
-                    );
-                }
-
-                const roomStatePacket = JSON.stringify({
-                    type: 'room:state_update',
-                    roomId: currentRoomId,
-                    heatScore,
-                    onlineCount,
-                    participants: Array.from(roomParticipants.values())
-                });
-
-                wss.clients.forEach((client) => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(roomStatePacket);
-                    }
-                });
-
-                await broadcastPopularRooms(wss);
-            }
-        });
-
-        ws.on('error', (err) => {
-            console.warn('[ChatSocket] Socket warning:', err.message);
-        });
-    });
-}
-
-/**
- * Direct real-time unicast to a specific user UID's connected WebSocket
- */
-function emitToUser(userId, packet) {
-    if (!userId) return false;
-    const cleanId = String(userId).trim();
-    const ws = onlineUsers.get(cleanId);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(packet));
-        return true;
-    }
-    return false;
-}
-
-setupChatSocket.emitToUser = emitToUser;
-
-module.exports = setupChatSocket;
+            
