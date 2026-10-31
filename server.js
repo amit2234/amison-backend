@@ -9,6 +9,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Initialize Firebase Admin SDK for Google Auth Verification
+require('./firebase');
+
 const server = http.createServer(app);
 
 // Configuration & MongoDB Atlas Connection
@@ -19,6 +22,15 @@ mongoose.connect(MONGO_URI)
     .then(() => console.log('🍃 [MongoDB Atlas] Connected successfully'))
     .catch(err => console.error('❌ [MongoDB Atlas] Connection Error:', err));
 
+// Health Check Endpoints (High Priority 0ms Response)
+app.get('/', (req, res) => {
+    res.send('Amison Gateway Server is running!');
+});
+
+app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', service: 'amison-backend', time: new Date().toISOString() });
+});
+
 // ============================================================================
 // MOUNT REST API ROUTERS
 // ============================================================================
@@ -26,7 +38,7 @@ mongoose.connect(MONGO_URI)
 // 1. Users REST API (/api/users, /api/user)
 const usersRoutes = require('./routes/users');
 app.use('/api/users', usersRoutes);
-app.use('/api', usersRoutes); // Backwards compatibility for /api/user/*
+app.use('/api/user', usersRoutes);
 
 // 2. Rooms REST API (/api/rooms)
 const roomsRoutes = require('./routes/rooms');
@@ -56,30 +68,6 @@ try {
         console.error('⚠️ [Server] Error loading newop:', e.message);
     }
 }
-
-// Health Check Endpoints
-app.get('/', (req, res) => {
-    res.send('Amison Gateway Server is running!');
-});
-
-app.get('/api/health', (req, res) => {
-    res.json({
-        status: 'OK',
-        service: 'Amison Modular Backend Gateway',
-        mongoReady: mongoose.connection.readyState === 1,
-        routes: {
-            users: true,
-            rooms: true,
-            messages: true,
-            wallet: true,
-            friends: true
-        },
-        sockets: {
-            roomSocket: '/ws/rooms',
-            chatSocket: '/ws/chat'
-        }
-    });
-});
 
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
