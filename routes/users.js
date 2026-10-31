@@ -1,18 +1,24 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const firebase = require('../firebase');
 
 // ============================================================================
 // USER REST API ENDPOINTS (/api/users/* and /api/user/*)
 // ============================================================================
 
 // 1. GET /user/:uid or GET /:uid - Fetch user profile by Auth UID, 9-digit numericId, or Email (2ms lean speed)
-async function handleGetUser(req, res) {
+async function handleGetUser(req, res, next) {
     try {
         const uid = req.params.uid;
         if (!uid) return res.status(400).json({ exists: false, error: 'Missing UID or Email' });
 
         const clean = String(uid).trim();
+        if (clean === 'search' || clean === 'create' || clean === 'update-profile') {
+            if (typeof next === 'function') return next();
+            return res.status(404).json({ exists: false, error: 'Not a user ID' });
+        }
+
         const cleanLower = clean.toLowerCase();
         const numId = Number(clean) || 0;
 
@@ -36,9 +42,6 @@ async function handleGetUser(req, res) {
         res.status(500).json({ exists: false, error: e.message });
     }
 }
-
-router.get('/user/:uid', handleGetUser);
-router.get('/:uid', handleGetUser);
 
 // 2. GET /search or GET /users/search - Search users by numericId, uid, or name
 async function handleSearchUsers(req, res) {
@@ -136,6 +139,108 @@ async function handleCreateUser(req, res) {
 router.post('/create', handleCreateUser);
 router.post('/user/create', handleCreateUser);
 
+// 3b. POST /google-login or POST /user/google-login - Verifies Firebase ID Token and manages MongoDB user
+async function handleGoogleLogin(req, res) {
+    try {
+        const { idToken, name, avatarUrl, dob, gender, country } = req.body;
+        if (!idToken) {
+            return res.status(400).json({ success: false, error: 'idToken is required' });
+        }
+
+        let verifiedUid = null;
+        let verifiedEmail = null;
+        let tokenName = '';
+        let tokenPicture = '';
+
+        if (firebase.isFirebaseInitialized() && firebase.admin) {
+            try {
+                const decodedToken = await firebase.admin.auth().verifyIdToken(idToken);
+                verifiedUid = decodedToken.uid;
+                verifiedEmail = decodedToken.email;
+                tokenName = decodedToken.name;
+                tokenPicture = decodedToken.picture;
+            } catch (tokenErr) {
+                console.error('[Users Route] Token verification failed:', tokenErr.message);
+                return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
+            }
+        } else {
+            console.warn('[Users Route] Firebase Admin not initialized, treating idToken as UID');
+            verifiedUid = String(idToken).trim();
+        }
+
+        if (!verifiedUid) {
+            return res.status(400).json({ success: false, error: 'Could not extract UID from token' });
+        }
+
+        const cleanUid = String(verifiedUid).trim();
+        const cleanEmail = (verifiedEmail || req.body.email || '').trim().toLowerCase();
+
+        // 1. Check if user already exists in MongoDB
+        let existingUser = await User.findOne({
+            $or: [
+                { uid: cleanUid },
+                ...(cleanEmail ? [{ email: cleanEmail }] : [])
+            ]
+        });
+
+        if (existingUser) {
+            // Direct 0ms login for existing user
+            return res.json({
+                success: true,
+                isNewUser: false,
+                user: existingUser,
+                message: 'Login successful'
+            });
+        }
+
+        // 2. New user: generate guaranteed unique 9-digit numericId
+        let numericId;
+        let isUnique = false;
+        let attempts = 0;
+        while (!isUnique && attempts < 10) {
+            numericId = Math.floor(100000000 + Math.random() * 900000000);
+            const conflict = await User.findOne({ numericId });
+            if (!conflict) isUnique = true;
+            attempts++;
+        }
+
+        const finalName = name || tokenName || 'User';
+        const finalAvatar = avatarUrl || tokenPicture || '';
+
+        const newUser = new User({
+            uid: cleanUid,
+            numericId: numericId || Math.floor(100000000 + Math.random() * 900000000),
+            name: String(finalName).trim(),
+            avatarUrl: finalAvatar,
+            dob: dob || '',
+            gender: gender || '',
+            country: country || 'India',
+            email: cleanEmail,
+            coins: 0,
+            diamonds: 0,
+            level: 1
+        });
+
+        await newUser.save();
+        console.log(`[Users Route] Google Sign-In: Created new user ${newUser.name} (${newUser.uid})`);
+
+        return res.status(201).json({
+            success: true,
+            isNewUser: true,
+            user: newUser,
+            message: 'User created successfully'
+        });
+
+    } catch (e) {
+        console.error('[Users Route] Google login error:', e);
+        res.status(500).json({ success: false, error: e.message });
+    }
+}
+
+router.post('/google-login', handleGoogleLogin);
+router.post('/user/google-login', handleGoogleLogin);
+router.post('/verify-token', handleGoogleLogin);
+
 // 4. POST /update-profile or POST /user/update-profile - Updates user profile
 async function handleUpdateProfile(req, res) {
     try {
@@ -176,5 +281,9 @@ async function handleUpdateProfile(req, res) {
 
 router.post('/update-profile', handleUpdateProfile);
 router.post('/user/update-profile', handleUpdateProfile);
+
+// 5. Parameterized UID lookup (mounted at bottom after specific static routes)
+router.get('/user/:uid', handleGetUser);
+router.get('/:uid', handleGetUser);
 
 module.exports = router;
