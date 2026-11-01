@@ -207,9 +207,6 @@ async function clearUnread(uid, conversationId) {
     }
 }
 
-/**
- * Sync Wallet Cache in Redis
- */
 async function syncWalletCache(uid, coins, diamonds) {
     if (!redisClient || redisClient.status !== 'ready' || !uid) return;
     try {
@@ -224,6 +221,48 @@ async function syncWalletCache(uid, coins, diamonds) {
     } catch (e) {
         // non-fatal
     }
+}
+
+/**
+ * Sync Store Catalog and User Inventory to high-speed Redis Cache (0ms Latency)
+ */
+async function syncStoreCatalogCache(catalogItems) {
+    if (!redisClient || redisClient.status !== 'ready' || !catalogItems) return;
+    try {
+        await redisClient.set('store:catalog:all', JSON.stringify(catalogItems), 'EX', 120);
+    } catch (e) {}
+}
+
+async function getCachedStoreCatalog() {
+    if (!redisClient || redisClient.status !== 'ready') return null;
+    try {
+        const cached = await redisClient.get('store:catalog:all');
+        if (cached) return JSON.parse(cached);
+    } catch (e) {}
+    return null;
+}
+
+async function syncUserInventoryCache(uid, inventoryObj) {
+    if (!redisClient || redisClient.status !== 'ready' || !uid) return;
+    try {
+        await redisClient.set(`store:inventory:${uid}`, JSON.stringify(inventoryObj), 'EX', 300);
+    } catch (e) {}
+}
+
+async function getCachedUserInventory(uid) {
+    if (!redisClient || redisClient.status !== 'ready' || !uid) return null;
+    try {
+        const cached = await redisClient.get(`store:inventory:${uid}`);
+        if (cached) return JSON.parse(cached);
+    } catch (e) {}
+    return null;
+}
+
+async function invalidateUserInventoryCache(uid) {
+    if (!redisClient || redisClient.status !== 'ready' || !uid) return;
+    try {
+        await redisClient.del(`store:inventory:${uid}`);
+    } catch (e) {}
 }
 
 module.exports = {
@@ -244,5 +283,10 @@ module.exports = {
     removeRoom,
     incrementUnread,
     clearUnread,
-    syncWalletCache
+    syncWalletCache,
+    syncStoreCatalogCache,
+    getCachedStoreCatalog,
+    syncUserInventoryCache,
+    getCachedUserInventory,
+    invalidateUserInventoryCache
 };
