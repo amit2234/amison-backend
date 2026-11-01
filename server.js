@@ -58,6 +58,10 @@ const friendsRoutes = require('./routes/friends');
 app.use('/api/friends', friendsRoutes);
 app.use('/api', friendsRoutes); // Backwards compatibility for /api/user/follow etc.
 
+// 6. Store REST API (/api/store)
+const storeRoutes = require('./routes/store');
+app.use('/api/store', storeRoutes);
+
 // 6. Admin Panel Router (/api/newop)
 try {
     const newopRoutes = require('./routes/newop');
