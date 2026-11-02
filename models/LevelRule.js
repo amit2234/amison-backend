@@ -1,62 +1,36 @@
 const mongoose = require('mongoose');
 
-const LevelConfigSchema = new mongoose.Schema({
-    levelId: {
+const LevelRuleSchema = new mongoose.Schema({
+    ruleKey: {
         type: String,
         required: true,
         unique: true,
-        index: true
+        default: 'GLOBAL_LEVEL_RULES'
     },
-    category: {
-        type: String,
-        required: true,
-        enum: ['USER', 'ROOM', 'CP', 'SM'],
-        index: true
-    },
-    levelNumber: {
+    userXpPerCoinSpent: {
         type: Number,
-        required: true,
-        min: 0
+        default: 10
     },
-    index: {
+    userXpPerCoinReceived: {
         type: Number,
-        default: 1
+        default: 5
     },
-    xpRequired: {
+    roomXpPerCoinSpent: {
         type: Number,
-        required: true,
-        min: 0
+        default: 10
     },
-    iconUrl: {
-        type: String,
-        default: ''
+    cpXpPerCoinSent: {
+        type: Number,
+        default: 10
     },
-    cloudinaryPublicId: {
-        type: String,
-        default: ''
+    dailyXpCap: {
+        type: Number,
+        default: 0
     },
-    badgeColor: {
-        type: String,
-        default: '#8B5CF6'
-    },
-    roomPerks: {
-        adminCount: { type: Number, default: 3 },
-        coAdminCount: { type: Number, default: 0 },
-        passwordEnabled: { type: Boolean, default: false },
-        gamesEnabled: { type: Boolean, default: false },
-        rewardType: { type: String, enum: ['None', 'Frame', 'Entrance', 'Theme'], default: 'None' },
-        rewardUrl: { type: String, default: '' }
-    },
-    isActive: {
+    isLiveEnabled: {
         type: Boolean,
         default: true
-    },
-    updatedBy: {
-        type: String,
-        default: 'admin'
     }
 }, { timestamps: true });
 
-LevelConfigSchema.index({ category: 1, levelNumber: 1 }, { unique: true });
-
-module.exports = mongoose.model('LevelConfig', LevelConfigSchema);
+module.exports = mongoose.model('LevelRule', LevelRuleSchema);
