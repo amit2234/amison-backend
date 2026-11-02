@@ -1,9 +1,15 @@
 const WebSocket = require('ws');
 const Room = require('../models/Room');
-const cacheService = require('../services/cacheService');
+const roomChannelManager = require('./managers/roomChannelManager');
+const roomStateHandler = require('./handlers/roomStateHandler');
+const stageSeatHandler = require('./handlers/stageSeatHandler');
+const roomChatHandler = require('./handlers/roomChatHandler');
+const roomGiftHandler = require('./handlers/roomGiftHandler');
+
+let globalRoomWss = null;
 
 /**
- * Broadcast popular rooms update to all connected clients
+ * Broadcast popular live rooms update
  */
 async function broadcastPopularRooms(wss) {
     try {
@@ -17,17 +23,18 @@ async function broadcastPopularRooms(wss) {
             rooms: rooms || []
         });
 
-        wss.clients.forEach((client) => {
-            if (client.readyState === WebSocket.OPEN) {
-                client.send(packet);
-            }
-        });
+        const targetWss = wss || globalRoomWss;
+        if (targetWss && targetWss.clients) {
+            targetWss.clients.forEach((client) => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(packet);
+                }
+            });
+        }
     } catch (e) {
         console.error('[RoomSocket] Broadcast popular rooms error:', e.message);
     }
 }
-
-let globalRoomWss = null;
 
 /**
  * Dedicated Room & 16-Seat Stage Real-Time WebSocket Server
@@ -36,370 +43,88 @@ let globalRoomWss = null;
 function setupRoomSocket(server) {
     const wss = new WebSocket.Server({ server, path: '/ws/rooms' });
     globalRoomWss = wss;
-    console.log('🎙️ [RoomSocket] Dedicated 16-Seat Stage & Room WebSocket Server running on /ws/rooms');
+    console.log('🎙️ [RoomSocket] High-Performance Channel-Based WebSocket Server running on /ws/rooms');
 
     wss.on('connection', (ws, req) => {
-        let currentUserId = null;
-        let currentRoomId = null;
-
         try {
             const urlObj = new URL(req.url, 'http://localhost');
-            currentUserId = (urlObj.searchParams.get('userId') || req.headers['x-user-id'] || '').trim();
-            currentRoomId = (urlObj.searchParams.get('roomId') || req.headers['x-room-id'] || '').trim();
-            if (currentUserId) {
-                console.log(`[RoomSocket] User connected to room socket: ${currentUserId} (Room: ${currentRoomId})`);
+            const userId = (urlObj.searchParams.get('userId') || req.headers['x-user-id'] || '').trim();
+            const roomId = (urlObj.searchParams.get('roomId') || req.headers['x-room-id'] || '').trim();
+            if (roomId && userId) {
+                roomChannelManager.joinRoomChannel(roomId, userId, ws);
             }
-        } catch (e) {
-            console.error('[RoomSocket] Error parsing connection request:', e.message);
-        }
+        } catch (_) {}
 
         ws.on('message', async (rawMessage) => {
             try {
                 const data = JSON.parse(rawMessage.toString());
+                const eventType = data.type;
 
-                // ============================================================
-                // A. User enters a room (Audience / Host) -> 10 heat points per user
-                // ============================================================
-                if (data.type === 'room:join' || data.type === 'join_room') {
-                    currentRoomId = String(data.roomId || currentRoomId || '').trim();
-                    currentUserId = String(data.userId || currentUserId || '').trim();
-                    const userName = data.userName || 'User';
-                    const userAvatar = data.userAvatar || data.avatarUrl || '';
-                    const isOwner = Boolean(data.isOwner || data.role === 'Owner');
+                switch (eventType) {
+                    case 'room:join':
+                    case 'join_room':
+                        await roomStateHandler.handleJoinRoom(data, ws, wss, broadcastPopularRooms);
+                        break;
 
-                    if (currentRoomId && currentUserId) {
-                        const roomParticipants = cacheService.getRoomParticipants(currentRoomId);
-                        
-                        roomParticipants.set(currentUserId, {
-                            userId: currentUserId,
-                            name: userName,
-                            avatar: userAvatar,
-                            onSeat: isOwner,
-                            seatIndex: isOwner ? 0 : -1
-                        });
+                    case 'room:seat':
+                    case 'seat_update':
+                        await stageSeatHandler.handleSeatUpdate(data, ws, wss, broadcastPopularRooms);
+                        break;
 
-                        const heatScore = cacheService.calculateRoomHeat(roomParticipants);
-                        const onlineCount = roomParticipants.size;
+                    case 'room:seat_toggle_lock':
+                    case 'seat:toggle_lock':
+                        await stageSeatHandler.handleSeatToggleLock(data, ws);
+                        break;
 
-                        // Background async MongoDB persistence
-                        Room.updateOne(
-                            { $or: [{ roomId: currentRoomId }, { ownerUid: currentRoomId }, { displayRoomId: currentRoomId }] },
-                            { $set: { heatScore, onlineCount, updatedAt: new Date() } }
-                        ).catch(err => console.error('[RoomSocket] Mongo room join update error:', err.message));
+                    case 'room:leave':
+                    case 'leave_room':
+                        await roomStateHandler.handleLeaveRoom(data, ws, wss, broadcastPopularRooms);
+                        break;
 
-                        // 1. Send full 16-seat stage snapshot to joining user
-                        const currentSeats = cacheService.getOrCreateRoomSeats(currentRoomId);
-                        ws.send(JSON.stringify({
-                            type: 'seats:batch',
-                            roomId: currentRoomId,
-                            seats: currentSeats
-                        }));
+                    case 'room:chat':
+                    case 'chat_message':
+                        roomChatHandler.handleRoomChat(data, ws);
+                        break;
 
-                        // 2. Broadcast updated room state to all in room
-                        const roomStatePacket = JSON.stringify({
-                            type: 'room:state_update',
-                            roomId: currentRoomId,
-                            heatScore,
-                            onlineCount,
-                            participants: Array.from(roomParticipants.values())
-                        });
+                    case 'gift:send':
+                    case 'room:gift_send':
+                    case 'send_gift':
+                        await roomGiftHandler.handleSendGift(data, ws);
+                        break;
 
-                        wss.clients.forEach((client) => {
-                            if (client.readyState === WebSocket.OPEN) {
-                                client.send(roomStatePacket);
-                            }
-                        });
+                    case 'ping':
+                        ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+                        break;
 
+                    case 'rooms:poll':
+                    case 'popular_rooms:get':
                         await broadcastPopularRooms(wss);
-                    }
-                }
+                        break;
 
-                // ============================================================
-                // B. User sits on a mic / seat -> Heat changes from 10 to 50
-                // ============================================================
-                else if (data.type === 'room:seat' || data.type === 'seat_update') {
-                    currentRoomId = String(data.roomId || currentRoomId || '').trim();
-                    const targetUserId = String(data.userId || '').trim();
-                    const onSeat = data.onSeat !== undefined ? Boolean(data.onSeat) : (targetUserId.length > 0);
-                    const seatIndex = data.seatIndex !== undefined ? Number(data.seatIndex) : -1;
-                    const isLocked = data.isLocked !== undefined ? Boolean(data.isLocked) : null;
-                    const isMuted = data.isMuted !== undefined ? Boolean(data.isMuted) : null;
-
-                    if (currentRoomId && seatIndex >= 0 && seatIndex < 16) {
-                        const seats = cacheService.getOrCreateRoomSeats(currentRoomId);
-                        const seat = seats[seatIndex];
-                        if (isLocked !== null) seat.isLocked = isLocked;
-                        if (isMuted !== null) seat.isMuted = isMuted;
-
-                        if (onSeat && targetUserId) {
-                            seat.userId = targetUserId;
-                            seat.userName = data.userName || seat.userName || 'User';
-                            seat.userAvatar = data.userAvatar || seat.userAvatar || '';
-                        } else if (!onSeat && targetUserId) {
-                            if (seat.userId === targetUserId) {
-                                seat.userId = null;
-                                seat.userName = null;
-                                seat.userAvatar = null;
-                            }
-                        }
-
-                        // Broadcast single seat update to all connected viewers in 0ms
-                        const seatPacket = JSON.stringify({
-                            type: 'seat:update',
-                            roomId: currentRoomId,
-                            seatIndex: seatIndex,
-                            userId: seat.userId || '',
-                            userName: seat.userName || '',
-                            userAvatar: seat.userAvatar || '',
-                            isLocked: seat.isLocked,
-                            isMuted: seat.isMuted
-                        });
-
-                        wss.clients.forEach((client) => {
-                            if (client.readyState === WebSocket.OPEN) {
-                                client.send(seatPacket);
-                            }
-                        });
-
-                        // Background async MongoDB persistence in rooms collection
-                        Room.updateOne(
-                            { $or: [{ roomId: currentRoomId }, { ownerUid: currentRoomId }, { displayRoomId: currentRoomId }] },
-                            { $set: { [`seats.${seatIndex}`]: seat, updatedAt: new Date() } }
-                        ).catch(err => console.error('[RoomSocket] Mongo seat update error:', err.message));
-                    }
-
-                    if (currentRoomId && targetUserId) {
-                        const roomParticipants = cacheService.getRoomParticipants(currentRoomId);
-                        const user = roomParticipants.get(targetUserId);
-                        if (user) {
-                            user.onSeat = onSeat;
-                            user.seatIndex = seatIndex;
-                            roomParticipants.set(targetUserId, user);
-                        }
-                        const heatScore = cacheService.calculateRoomHeat(roomParticipants);
-                        const onlineCount = roomParticipants.size;
-
-                        Room.updateOne(
-                            { $or: [{ roomId: currentRoomId }, { ownerUid: currentRoomId }, { displayRoomId: currentRoomId }] },
-                            { $set: { heatScore, onlineCount, updatedAt: new Date() } }
-                        ).catch(() => {});
-
-                        const roomStatePacket = JSON.stringify({
-                            type: 'room:state_update',
-                            roomId: currentRoomId,
-                            heatScore,
-                            onlineCount,
-                            participants: Array.from(roomParticipants.values())
-                        });
-
-                        wss.clients.forEach((client) => {
-                            if (client.readyState === WebSocket.OPEN) {
-                                client.send(roomStatePacket);
-                            }
-                        });
-
-                        await broadcastPopularRooms(wss);
-                    }
-                }
-
-                // ============================================================
-                // B.1 Host/Admin Toggles Seat Lock/Unlock (Ultra-Fast 0ms Lock/Unlock)
-                // ============================================================
-                else if (data.type === 'room:seat_toggle_lock' || data.type === 'seat:toggle_lock') {
-                    currentRoomId = String(data.roomId || currentRoomId || '').trim();
-                    const seatIndex = data.seatIndex !== undefined ? Number(data.seatIndex) : -1;
-                    const isLocked = Boolean(data.isLocked);
-
-                    if (currentRoomId && seatIndex >= 0 && seatIndex < 16) {
-                        const seats = cacheService.getOrCreateRoomSeats(currentRoomId);
-                        const seat = seats[seatIndex];
-                        seat.isLocked = isLocked;
-                        let kickedUserId = null;
-
-                        if (isLocked && seat.userId) {
-                            kickedUserId = seat.userId;
-                            seat.userId = null;
-                            seat.userName = null;
-                            seat.userAvatar = null;
-                        }
-
-                        const lockPacket = JSON.stringify({
-                            type: 'seat:update',
-                            roomId: currentRoomId,
-                            seatIndex: seatIndex,
-                            userId: seat.userId || '',
-                            userName: seat.userName || '',
-                            userAvatar: seat.userAvatar || '',
-                            isLocked: seat.isLocked,
-                            isMuted: seat.isMuted,
-                            kickedUserId: kickedUserId
-                        });
-
-                        wss.clients.forEach((client) => {
-                            if (client.readyState === WebSocket.OPEN) {
-                                client.send(lockPacket);
-                            }
-                        });
-
-                        Room.updateOne(
-                            { $or: [{ roomId: currentRoomId }, { ownerUid: currentRoomId }, { displayRoomId: currentRoomId }] },
-                            { $set: { [`seats.${seatIndex}`]: seat, updatedAt: new Date() } }
-                        ).catch(err => console.error('[RoomSocket] Mongo seat lock update error:', err.message));
-                    }
-                }
-
-                // ============================================================
-                // C. User leaves room -> Heat recalculates
-                // ============================================================
-                else if (data.type === 'room:leave' || data.type === 'leave_room') {
-                    currentRoomId = String(data.roomId || currentRoomId || '').trim();
-                    const targetUserId = String(data.userId || currentUserId || '').trim();
-
-                    if (currentRoomId && targetUserId) {
-                        const roomParticipants = cacheService.getRoomParticipants(currentRoomId);
-                        roomParticipants.delete(targetUserId);
-
-                        const heatScore = cacheService.calculateRoomHeat(roomParticipants);
-                        const onlineCount = roomParticipants.size;
-
-                        Room.updateOne(
-                            { $or: [{ roomId: currentRoomId }, { ownerUid: currentRoomId }, { displayRoomId: currentRoomId }] },
-                            { $set: { heatScore, onlineCount, updatedAt: new Date() } }
-                        ).catch(() => {});
-
-                        const roomStatePacket = JSON.stringify({
-                            type: 'room:state_update',
-                            roomId: currentRoomId,
-                            heatScore,
-                            onlineCount,
-                            participants: Array.from(roomParticipants.values())
-                        });
-
-                        wss.clients.forEach((client) => {
-                            if (client.readyState === WebSocket.OPEN) {
-                                client.send(roomStatePacket);
-                            }
-                        });
-
-                        await broadcastPopularRooms(wss);
-                    }
-                }
-
-                // ============================================================
-                // D. Room Live Chat Message
-                // ============================================================
-                else if (data.type === 'room:chat' || data.type === 'chat_message') {
-                    currentRoomId = String(data.roomId || currentRoomId || '').trim();
-                    const chatPacket = JSON.stringify({
-                        type: 'room:chat_receive',
-                        roomId: currentRoomId,
-                        senderId: data.senderId,
-                        senderName: data.senderName || 'User',
-                        senderAvatar: data.senderAvatar || '',
-                        text: data.text || data.message || '',
-                        timestamp: Date.now()
-                    });
-
-                    wss.clients.forEach((client) => {
-                        if (client.readyState === WebSocket.OPEN) {
-                            client.send(chatPacket);
-                        }
-                    });
-                }
-
-                // ============================================================
-                // D2. Real-Time Voice Room Gifting (0ms Latency Engine)
-                // ============================================================
-                else if (data.type === 'gift:send' || data.type === 'room:gift_send' || data.type === 'send_gift') {
-                    const giftService = require('../services/giftService');
-                    try {
-                        const targetRoomId = String(data.roomId || currentRoomId || '').trim();
-                        const senderUid = String(data.senderId || currentUserId || '').trim();
-                        const result = await giftService.sendGift({
-                            senderId: senderUid,
-                            receiverId: data.receiverId,
-                            giftId: data.giftId,
-                            giftCost: data.giftCost || data.coinCost,
-                            multiplier: data.multiplier || 1,
-                            roomId: targetRoomId,
-                            giftName: data.giftName,
-                            targetMicIndex: data.targetMicIndex !== undefined ? data.targetMicIndex : -1,
-                            txId: data.txId
-                        });
-
-                        ws.send(JSON.stringify({
-                            type: 'gift:ack',
-                            success: true,
-                            transactionId: result.transactionId,
-                            remainingCoins: result.remainingCoins,
-                            giftId: data.giftId
-                        }));
-                    } catch (giftErr) {
-                        console.warn('[RoomSocket] Gift execution failed:', giftErr.message);
-                        ws.send(JSON.stringify({
-                            type: 'gift:ack',
-                            success: false,
-                            error: giftErr.message,
-                            remainingCoins: giftErr.remainingCoins
-                        }));
-                    }
-                }
-
-                // ============================================================
-                // E. Keep-Alive Ping/Pong
-                // ============================================================
-                else if (data.type === 'ping') {
-                    ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
-                }
-
-                // ============================================================
-                // F. Explore Rooms Poll Request
-                // ============================================================
-                else if (data.type === 'rooms:poll' || data.type === 'popular_rooms:get') {
-                    await broadcastPopularRooms(wss);
+                    default:
+                        break;
                 }
             } catch (err) {
-                console.error('[RoomSocket] Error parsing message:', err.message);
+                console.error('[RoomSocket] Message handling error:', err.message);
             }
         });
 
         ws.on('close', async () => {
-            if (currentRoomId && currentUserId) {
-                const roomParticipants = cacheService.getRoomParticipants(currentRoomId);
-                roomParticipants.delete(currentUserId);
-
-                const heatScore = cacheService.calculateRoomHeat(roomParticipants);
-                const onlineCount = roomParticipants.size;
-
-                Room.updateOne(
-                    { $or: [{ roomId: currentRoomId }, { ownerUid: currentRoomId }, { displayRoomId: currentRoomId }] },
-                    { $set: { heatScore, onlineCount, updatedAt: new Date() } }
-                ).catch(() => {});
-
-                const roomStatePacket = JSON.stringify({
-                    type: 'room:state_update',
-                    roomId: currentRoomId,
-                    heatScore,
-                    onlineCount,
-                    participants: Array.from(roomParticipants.values())
-                });
-
-                wss.clients.forEach((client) => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(roomStatePacket);
-                    }
-                });
-
-                await broadcastPopularRooms(wss);
+            const meta = roomChannelManager.handleDisconnect(ws);
+            if (meta && meta.roomId) {
+                await roomStateHandler.handleLeaveRoom({ roomId: meta.roomId, userId: meta.userId }, ws, wss, broadcastPopularRooms);
             }
         });
 
         ws.on('error', (err) => {
-            console.warn('[RoomSocket] Socket warning:', err.message);
+            console.warn('[RoomSocket] Socket error:', err.message);
         });
     });
 }
 
+/**
+ * Helper Broadcast Functions (Targeted O(1) Room Channels)
+ */
 function broadcastGiftCatalogSync(payload) {
     if (!globalRoomWss || !globalRoomWss.clients) return;
     const packet = JSON.stringify({
@@ -410,4 +135,53 @@ function broadcastGiftCatalogSync(payload) {
     });
     globalRoomWss.clients.forEach((client) => {
         if (client.readyState === WebSocket.OPEN) {
-   
+            client.send(packet);
+        }
+    });
+}
+
+function broadcastRoomGift(payload) {
+    const roomId = String(payload.roomId || '').trim();
+    if (!roomId) return;
+
+    const giftPacket = {
+        type: 'room:gift_broadcast',
+        roomId,
+        senderId: payload.senderId,
+        senderName: payload.senderName,
+        senderAvatar: payload.senderAvatar,
+        receiverId: payload.receiverId,
+        receiverName: payload.receiverName,
+        receiverAvatar: payload.receiverAvatar,
+        targetMicIndex: payload.targetMicIndex !== undefined ? payload.targetMicIndex : -1,
+        giftId: payload.giftId,
+        giftName: payload.giftName,
+        iconUrl: payload.iconUrl,
+        animationUrl: payload.animationUrl,
+        animationType: payload.animationType,
+        multiplier: payload.multiplier || 1,
+        timestamp: payload.timestamp || Date.now()
+    };
+
+    const chatPacket = {
+        type: 'room:chat_receive',
+        roomId,
+        senderId: payload.senderId,
+        senderName: payload.senderName,
+        senderAvatar: payload.senderAvatar,
+        text: `sent ${payload.giftName || 'Gift'} x${payload.multiplier || 1} to ${payload.receiverName || 'Host'}`,
+        isGiftNotice: true,
+        giftIcon: payload.iconUrl,
+        timestamp: Date.now()
+    };
+
+    // O(1) Targeted Room Broadcast ONLY to clients in this voice room
+    roomChannelManager.broadcastToRoom(roomId, giftPacket);
+    roomChannelManager.broadcastToRoom(roomId, chatPacket);
+}
+
+setupRoomSocket.broadcastPopularRooms = broadcastPopularRooms;
+setupRoomSocket.broadcastGiftCatalogSync = broadcastGiftCatalogSync;
+setupRoomSocket.broadcastRoomGift = broadcastRoomGift;
+
+module.exports = setupRoomSocket;
