@@ -66,4 +66,13 @@ router.post('/merchants/remove', NewopController.requireNewopAdmin, MerchantCont
 router.post('/merchants/allocate-stock', NewopController.requireNewopAdmin, MerchantController.allocateStock);
 router.get('/merchants/transactions', NewopController.requireNewopAdmin, MerchantController.getAllTransactions);
 
+// Diamond (Finance) Management Endpoints (100% Pure MongoDB Atlas + Redis, Zero Firestore)
+const DiamondFinanceController = require('../controllers/diamondFinanceController');
+router.get('/diamond/overview', NewopController.requireNewopAdmin, DiamondFinanceController.getOverview);
+router.get('/diamond/top-holders', NewopController.requireNewopAdmin, DiamondFinanceController.getTopHolders);
+router.get('/diamond/ledger', NewopController.requireNewopAdmin, DiamondFinanceController.getLedger);
+router.post('/diamond/adjust', NewopController.requireNewopAdmin, DiamondFinanceController.adjustDiamonds);
+router.post('/diamond/freeze-wallet', NewopController.requireNewopAdmin, DiamondFinanceController.setWalletStatus);
+
 module.exports = router;
+
