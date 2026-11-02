@@ -4,12 +4,10 @@ const User = require('../models/User');
 const WalletTransaction = require('../models/Transaction');
 const Gift = require('../models/Gift');
 const cacheService = require('./cacheService');
+const { resolveUser } = require('../utils/userResolver');
+const walletExchangeService = require('./walletExchangeService');
 
 // Redis Atomic Lua Script for Sub-Millisecond Gift Transfer
-// KEYS[1]: wallet:coins:{senderUid}
-// KEYS[2]: wallet:diamonds:{receiverUid}
-// KEYS[3]: wallet:tx:{txId}
-// ARGV[1]: coinCost, ARGV[2]: diamondReward, ARGV[3]: ttlSeconds
 const LUA_ATOMIC_GIFT = `
 if redis.call("EXISTS", KEYS[3]) == 1 then
     return {-2, tonumber(redis.call("GET", KEYS[1]) or "0"), tonumber(redis.call("GET", KEYS[2]) or "0")}
@@ -27,19 +25,6 @@ local newSenderCoins = redis.call("DECRBY", KEYS[1], cost)
 local newReceiverDiamonds = redis.call("INCRBY", KEYS[2], tonumber(ARGV[2]))
 return {1, newSenderCoins, newReceiverDiamonds}
 `;
-
-/**
- * Resolves a user document by Permanent Auth UID or 9-digit numericId
- */
-async function resolveUser(rawId) {
-    if (!rawId) return null;
-    const clean = String(rawId).trim();
-    const numId = Number(clean);
-    const query = (!isNaN(numId) && numId > 0 && /^\d+$/.test(clean))
-        ? { $or: [{ uid: clean }, { numericId: numId }] }
-        : { uid: clean };
-    return await User.findOne(query).lean();
-}
 
 /**
  * 0-Trust Atomic Gift Transfer Logic
@@ -98,7 +83,7 @@ async function sendGift({
     const canonicalReceiverUid = receiverDoc ? receiverDoc.uid : String(receiverId).trim();
 
     return await cacheService.withUserLock(canonicalSenderUid, async () => {
-        // Optional Redis Lua Fast-Path
+        // Redis Lua Fast-Path
         const redis = cacheService.redisClient;
         if (redis && redis.status === 'ready') {
             try {
@@ -120,7 +105,6 @@ async function sendGift({
                 }
             } catch (redisErr) {
                 if (redisErr.status) throw redisErr;
-                // fallback to MongoDB Atomic Engine
             }
         }
 
@@ -185,7 +169,7 @@ async function sendGift({
             }
         }
 
-        // Write immutable Passbook Ledger record asynchronously
+        // Passbook Ledger logging
         WalletTransaction.create({
             txId,
             type: 'GIFT_SEND',
@@ -300,7 +284,6 @@ async function sendMultiGift({
             throw err;
         }
 
-        // Credit each recipient atomically
         for (const rawRecId of cleanRecipients) {
             const recDoc = await resolveUser(rawRecId);
             if (recDoc) {
@@ -340,152 +323,10 @@ async function sendMultiGift({
     });
 }
 
-/**
- * 0-Trust Atomic Diamond to Coin Conversion
- */
-async function convertDiamondsToCoins({ uid, diamondsToConvert, txId: clientTxId }) {
-    const diamonds = Math.floor(Number(diamondsToConvert) || 0);
-    if (!uid || diamonds <= 0) {
-        throw new Error('Invalid conversion amount');
-    }
-
-    const txId = (clientTxId && String(clientTxId).trim()) || crypto.randomUUID();
-    if (!cacheService.checkAndMarkIdempotency(txId)) {
-        const err = new Error('Duplicate conversion request blocked');
-        err.status = 409;
-        throw err;
-    }
-
-    const userDoc = await resolveUser(uid);
-    if (!userDoc) {
-        const err = new Error('User not found');
-        err.status = 404;
-        throw err;
-    }
-
-    const coinsGained = Math.max(1, Math.floor((diamonds * 70) / 100));
-
-    return await cacheService.withUserLock(userDoc.uid, async () => {
-        const updatedUser = await User.findOneAndUpdate(
-            { uid: userDoc.uid, diamonds: { $gte: diamonds } },
-            {
-                $inc: { diamonds: -diamonds, coins: coinsGained },
-                $set: { updatedAt: new Date() }
-            },
-            { new: true }
-        ).lean();
-
-        if (!updatedUser) {
-            const err = new Error('Insufficient Diamonds balance');
-            err.status = 400;
-            throw err;
-        }
-
-        await cacheService.syncWalletCache(updatedUser.uid, updatedUser.coins, updatedUser.diamonds);
-
-        const NewopUserControl = mongoose.models.NewopUserControl;
-        if (NewopUserControl) {
-            await NewopUserControl.findOneAndUpdate(
-                { uid: updatedUser.uid },
-                { $set: { goldCoin: updatedUser.coins, diamond: updatedUser.diamonds, updatedAt: new Date() } },
-                { upsert: true }
-            ).catch(() => {});
-        }
-
-        WalletTransaction.create({
-            txId,
-            type: 'CONVERT_DIAMOND_TO_COIN',
-            senderUid: updatedUser.uid,
-            receiverUid: updatedUser.uid,
-            coinsDelta: coinsGained,
-            diamondsDelta: -diamonds,
-            senderCoinsAfter: Number(updatedUser.coins) || 0,
-            senderDiamondsAfter: Number(updatedUser.diamonds) || 0
-        }).catch(() => {});
-
-        return {
-            success: true,
-            transactionId: txId,
-            coins: Number(updatedUser.coins) || 0,
-            diamonds: Number(updatedUser.diamonds) || 0,
-            coinsGained
-        };
-    });
-}
-
-/**
- * 0-Trust Atomic Diamond Withdrawal
- */
-async function withdrawDiamonds({ uid, diamondsToWithdraw, method = 'UPI', txId: clientTxId }) {
-    const diamonds = Math.floor(Number(diamondsToWithdraw) || 0);
-    if (!uid || diamonds <= 0) {
-        throw new Error('Invalid withdrawal amount');
-    }
-
-    const txId = (clientTxId && String(clientTxId).trim()) || crypto.randomUUID();
-    if (!cacheService.checkAndMarkIdempotency(txId)) {
-        const err = new Error('Duplicate withdrawal request blocked');
-        err.status = 409;
-        throw err;
-    }
-
-    const userDoc = await resolveUser(uid);
-    if (!userDoc) {
-        const err = new Error('User not found');
-        err.status = 404;
-        throw err;
-    }
-
-    return await cacheService.withUserLock(userDoc.uid, async () => {
-        const updatedUser = await User.findOneAndUpdate(
-            { uid: userDoc.uid, diamonds: { $gte: diamonds } },
-            {
-                $inc: { diamonds: -diamonds },
-                $set: { updatedAt: new Date() }
-            },
-            { new: true }
-        ).lean();
-
-        if (!updatedUser) {
-            const err = new Error('Insufficient Diamonds balance');
-            err.status = 400;
-            throw err;
-        }
-
-        await cacheService.syncWalletCache(updatedUser.uid, updatedUser.coins, updatedUser.diamonds);
-
-        const NewopUserControl = mongoose.models.NewopUserControl;
-        if (NewopUserControl) {
-            await NewopUserControl.findOneAndUpdate(
-                { uid: updatedUser.uid },
-                { $set: { goldCoin: updatedUser.coins, diamond: updatedUser.diamonds, updatedAt: new Date() } },
-                { upsert: true }
-            ).catch(() => {});
-        }
-
-        WalletTransaction.create({
-            txId,
-            type: 'WITHDRAW_DIAMOND',
-            senderUid: updatedUser.uid,
-            coinsDelta: 0,
-            diamondsDelta: -diamonds,
-            senderCoinsAfter: Number(updatedUser.coins) || 0,
-            senderDiamondsAfter: Number(updatedUser.diamonds) || 0
-        }).catch(() => {});
-
-        return {
-            success: true,
-            transactionId: txId,
-            coins: Number(updatedUser.coins) || 0,
-            diamonds: Number(updatedUser.diamonds) || 0
-        };
-    });
-}
-
 module.exports = {
     sendGift,
     sendMultiGift,
-    convertDiamondsToCoins,
-    withdrawDiamonds,
+    convertDiamondsToCoins: walletExchangeService.convertDiamondsToCoins,
+    withdrawDiamonds: walletExchangeService.withdrawDiamonds,
     resolveUser
 };
