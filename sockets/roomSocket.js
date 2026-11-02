@@ -92,6 +92,12 @@ function setupRoomSocket(server) {
                         await roomGiftHandler.handleSendGift(data, ws);
                         break;
 
+                    case 'send_seat_emoji':
+                    case 'room:send_emoji':
+                    case 'seat_emoji':
+                        await stageSeatHandler.handleSendSeatEmoji(data, ws);
+                        break;
+
                     case 'ping':
                         ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
                         break;
