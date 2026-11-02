@@ -74,7 +74,6 @@ const diamondBalanceSchema = new mongoose.Schema({
 });
 
 diamondBalanceSchema.index({ availableDiamonds: -1 });
-diamondBalanceSchema.index({ displayUserId: 1 });
 
 const DiamondBalance = mongoose.models.DiamondBalance || mongoose.model('DiamondBalance', diamondBalanceSchema);
 
