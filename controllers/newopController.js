@@ -281,6 +281,56 @@ const NewopController = {
             console.error('[NewopController] deleteGift error:', e);
             res.status(500).json({ success: false, error: e.message });
         }
+    },
+
+    // =========================================================================
+    // EMOJI MANAGEMENT CONTROLLERS (100% PURE MONGODB + CLOUDINARY + REDIS + WS)
+    // =========================================================================
+
+    async getEmojis(req, res) {
+        try {
+            const NewopEmojiService = require('../services/newopEmojiService');
+            const emojis = await NewopEmojiService.getAllEmojis(req.callerUid);
+            res.json({ success: true, count: emojis.length, emojis });
+        } catch (e) {
+            console.error('[NewopController] getEmojis error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async addEmoji(req, res) {
+        try {
+            const NewopEmojiService = require('../services/newopEmojiService');
+            const emoji = await NewopEmojiService.addEmoji(req.callerUid, req.body, req.files);
+            res.json({ success: true, message: 'Emoji published successfully', emoji });
+        } catch (e) {
+            console.error('[NewopController] addEmoji error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async editEmoji(req, res) {
+        try {
+            const NewopEmojiService = require('../services/newopEmojiService');
+            const { emojiId } = req.params;
+            const emoji = await NewopEmojiService.editEmoji(req.callerUid, emojiId || req.body.emojiId, req.body, req.files);
+            res.json({ success: true, message: 'Emoji updated successfully', emoji });
+        } catch (e) {
+            console.error('[NewopController] editEmoji error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async deleteEmoji(req, res) {
+        try {
+            const NewopEmojiService = require('../services/newopEmojiService');
+            const { emojiId } = req.params;
+            const emoji = await NewopEmojiService.deleteEmoji(req.callerUid, emojiId || req.body.emojiId);
+            res.json({ success: true, message: 'Emoji deleted successfully', emoji });
+        } catch (e) {
+            console.error('[NewopController] deleteEmoji error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
     }
 };
 
