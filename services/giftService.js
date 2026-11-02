@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const WalletTransaction = require('../models/Transaction');
+const Gift = require('../models/Gift');
 const cacheService = require('./cacheService');
 
 // Redis Atomic Lua Script for Sub-Millisecond Gift Transfer
@@ -51,6 +52,7 @@ async function sendGift({
     multiplier = 1,
     roomId = '',
     giftName = '',
+    targetMicIndex = -1,
     txId: clientTxId
 }) {
     if (!senderId || !receiverId) {
@@ -58,12 +60,24 @@ async function sendGift({
     }
 
     const safeMultiplier = Math.max(1, Math.min(9999, Math.floor(Number(multiplier) || 1)));
-    const rawCost = Math.floor(Number(giftCost) || 0);
-    if (rawCost <= 0) {
-        throw new Error('Invalid gift cost (0-Trust rejected)');
+
+    let resolvedGift = null;
+    if (giftId) {
+        try {
+            resolvedGift = await Gift.findOne({ giftId: String(giftId).trim(), isActive: true }).lean();
+        } catch (_) {}
     }
 
-    const totalCoinCost = rawCost;
+    const finalGiftName = (resolvedGift && resolvedGift.name) || giftName || 'Gift';
+    const unitCost = (resolvedGift && resolvedGift.coinPrice) || Math.floor(Number(giftCost) || 0);
+    const totalCoinCost = Math.floor(Number(unitCost) * safeMultiplier);
+    if (totalCoinCost <= 0) {
+        throw new Error('Invalid gift cost (0-Trust rejected)');
+    }
+    const finalIconUrl = (resolvedGift && resolvedGift.iconUrl) || '';
+    const finalAnimUrl = (resolvedGift && resolvedGift.animationUrl) || '';
+    const finalAnimType = (resolvedGift && resolvedGift.animationType) || 'SVGA_ANIMATION';
+
     const diamondReward = Math.max(1, Math.floor((totalCoinCost * 70) / 100));
     const txId = (clientTxId && String(clientTxId).trim()) || crypto.randomUUID();
 
@@ -178,7 +192,7 @@ async function sendGift({
             senderUid: canonicalSenderUid,
             receiverUid: canonicalReceiverUid,
             giftId: String(giftId || ''),
-            giftName: String(giftName || ''),
+            giftName: finalGiftName,
             multiplier: safeMultiplier,
             coinsDelta: -totalCoinCost,
             diamondsDelta: diamondReward,
@@ -187,10 +201,39 @@ async function sendGift({
             roomId: String(roomId || '')
         }).catch(() => {});
 
+        // Broadcast 60fps animation & fly gift to room WebSockets
+        if (roomId) {
+            try {
+                const setupRoomSocket = require('../sockets/roomSocket');
+                if (typeof setupRoomSocket.broadcastRoomGift === 'function') {
+                    setupRoomSocket.broadcastRoomGift({
+                        roomId: String(roomId).trim(),
+                        senderId: canonicalSenderUid,
+                        senderName: senderDoc.name || 'User',
+                        senderAvatar: senderDoc.profilePhoto || senderDoc.avatar || '',
+                        receiverId: canonicalReceiverUid,
+                        receiverName: receiverDoc ? receiverDoc.name : 'Host',
+                        receiverAvatar: receiverDoc ? (receiverDoc.profilePhoto || receiverDoc.avatar || '') : '',
+                        targetMicIndex: targetMicIndex !== undefined ? Number(targetMicIndex) : -1,
+                        giftId: String(giftId || ''),
+                        giftName: finalGiftName,
+                        iconUrl: finalIconUrl,
+                        animationUrl: finalAnimUrl,
+                        animationType: finalAnimType,
+                        multiplier: safeMultiplier,
+                        timestamp: Date.now()
+                    });
+                }
+            } catch (wsErr) {
+                console.warn('[GiftService] WebSocket broadcast error:', wsErr.message);
+            }
+        }
+
         return {
             success: true,
             message: 'Gift sent successfully',
             transactionId: txId,
+            giftName: finalGiftName,
             remainingCoins: Number(updatedSender.coins) || 0,
             senderDiamonds: Number(updatedSender.diamonds) || 0,
             receiverDiamonds: updatedReceiverDiamonds
