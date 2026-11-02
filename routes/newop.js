@@ -58,4 +58,12 @@ router.post('/emojis/edit', NewopController.requireNewopAdmin, emojiUploadMiddle
 router.delete('/emojis/delete/:emojiId', NewopController.requireNewopAdmin, NewopController.deleteEmoji);
 router.post('/emojis/delete', NewopController.requireNewopAdmin, NewopController.deleteEmoji);
 
+// Merchant & Coin Seller Management Endpoints (100% Zero-Trust Backend)
+const MerchantController = require('../controllers/merchantController');
+router.get('/merchants', NewopController.requireNewopAdmin, MerchantController.getAllMerchants);
+router.post('/merchants/add', NewopController.requireNewopAdmin, MerchantController.addMerchant);
+router.post('/merchants/remove', NewopController.requireNewopAdmin, MerchantController.removeMerchant);
+router.post('/merchants/allocate-stock', NewopController.requireNewopAdmin, MerchantController.allocateStock);
+router.get('/merchants/transactions', NewopController.requireNewopAdmin, MerchantController.getAllTransactions);
+
 module.exports = router;
