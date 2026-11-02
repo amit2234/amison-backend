@@ -1,4 +1,6 @@
-const NewopService = require('../services/newopService');
+const NewopAuthService = require('../services/newopAuthService');
+const NewopUserService = require('../services/newopUserService');
+const NewopRoomService = require('../services/newopRoomService');
 
 /**
  * Zero-Trust Backend Middleware: Rejects any unauthorized request with HTTP 403 Forbidden.
@@ -17,7 +19,7 @@ async function requireNewopAdmin(req, res, next) {
             });
         }
 
-        const isAuth = await NewopService.isAuthorizedNewopAdmin(callerUid);
+        const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(callerUid);
         if (!isAuth) {
             return res.status(403).json({
                 success: false,
@@ -42,7 +44,7 @@ const NewopController = {
             if (!uid) return res.json({ success: true, hasAccess: false, title: '' });
 
             const cleanUid = String(uid).trim();
-            const hasAccess = await NewopService.isAuthorizedNewopAdmin(cleanUid);
+            const hasAccess = await NewopAuthService.isAuthorizedNewopAdmin(cleanUid);
 
             return res.json({
                 success: true,
@@ -61,7 +63,7 @@ const NewopController = {
             if (!uid) return res.status(400).json({ success: false, error: 'UID is required' });
 
             const cleanUid = String(uid).trim();
-            const isAuth = await NewopService.isAuthorizedNewopAdmin(cleanUid);
+            const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(cleanUid);
 
             if (!isAuth) {
                 return res.status(403).json({ success: false, error: 'Unauthorized Newop Admin UID' });
@@ -80,7 +82,7 @@ const NewopController = {
 
     async getUsers(req, res) {
         try {
-            const formatted = await NewopService.getAllUsers();
+            const formatted = await NewopUserService.getAllUsers();
             res.json({ success: true, count: formatted.length, users: formatted });
         } catch (e) {
             console.error('[NewopController] getUsers error:', e);
@@ -91,7 +93,7 @@ const NewopController = {
     async banUser(req, res) {
         try {
             const { userId, uid, isBanned } = req.body;
-            const updated = await NewopService.banOrUnbanUser(userId || uid, isBanned);
+            const updated = await NewopUserService.banOrUnbanUser(userId || uid, isBanned);
             res.json({ success: true, message: `User ${isBanned ? 'banned' : 'unbanned'} successfully`, user: updated });
         } catch (e) {
             console.error('[NewopController] banUser error:', e);
@@ -101,7 +103,7 @@ const NewopController = {
 
     async updateUser(req, res) {
         try {
-            const updated = await NewopService.updateUserDetails(req.body);
+            const updated = await NewopUserService.updateUserDetails(req.body);
             res.json({ success: true, message: 'User updated successfully', user: updated });
         } catch (e) {
             console.error('[NewopController] updateUser error:', e);
@@ -112,7 +114,7 @@ const NewopController = {
     async resetPhotos(req, res) {
         try {
             const { userId } = req.body;
-            const updated = await NewopService.resetUserPhotos(userId);
+            const updated = await NewopUserService.resetUserPhotos(userId);
             res.json({ success: true, message: 'User photos reset successfully', user: updated });
         } catch (e) {
             console.error('[NewopController] resetPhotos error:', e);
@@ -122,7 +124,7 @@ const NewopController = {
 
     async getRooms(req, res) {
         try {
-            const formatted = await NewopService.getAllRooms();
+            const formatted = await NewopRoomService.getAllRooms();
             res.json({ success: true, count: formatted.length, rooms: formatted });
         } catch (e) {
             console.error('[NewopController] getRooms error:', e);
@@ -132,7 +134,7 @@ const NewopController = {
 
     async getRoomInfo(req, res) {
         try {
-            const roomObj = await NewopService.getRoomInfo(req.params.id);
+            const roomObj = await NewopRoomService.getRoomInfo(req.params.id);
             res.json({ success: true, room: roomObj });
         } catch (e) {
             console.error('[NewopController] getRoomInfo error:', e);
@@ -142,7 +144,7 @@ const NewopController = {
 
     async updateRoom(req, res) {
         try {
-            const updated = await NewopService.updateRoomDetails(req.body);
+            const updated = await NewopRoomService.updateRoomDetails(req.body);
             res.json({ success: true, message: 'Room updated successfully', room: updated });
         } catch (e) {
             console.error('[NewopController] updateRoom error:', e);
@@ -153,7 +155,7 @@ const NewopController = {
     async blockRoom(req, res) {
         try {
             const { roomId, isBlocked } = req.body;
-            const updated = await NewopService.blockOrUnblockRoom(roomId, isBlocked);
+            const updated = await NewopRoomService.blockOrUnblockRoom(roomId, isBlocked);
             res.json({ success: true, message: `Room ${isBlocked ? 'blocked' : 'unblocked'} successfully`, room: updated });
         } catch (e) {
             console.error('[NewopController] blockRoom error:', e);
@@ -164,7 +166,7 @@ const NewopController = {
     async resetRoomPhotos(req, res) {
         try {
             const { roomId } = req.body;
-            const updated = await NewopService.resetRoomPhotos(roomId);
+            const updated = await NewopRoomService.resetRoomPhotos(roomId);
             res.json({ success: true, message: 'Room photos reset successfully', room: updated });
         } catch (e) {
             console.error('[NewopController] resetRoomPhotos error:', e);
