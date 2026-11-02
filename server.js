@@ -91,6 +91,10 @@ app.use('/api/merchant', merchantRoutes);
 const bannersRoutes = require('./routes/banners');
 app.use('/api/banners', bannersRoutes);
 
+// 12. Dynamic Levels REST API (/api/levels)
+const levelsRoutes = require('./routes/levels');
+app.use('/api/levels', levelsRoutes);
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
 // ============================================================================
