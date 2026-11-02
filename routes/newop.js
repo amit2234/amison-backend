@@ -45,7 +45,17 @@ router.post('/gifts/create', NewopController.requireNewopAdmin, giftUploadMiddle
 router.post('/gifts/add', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
 router.put('/gifts/edit/:giftId', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
 router.post('/gifts/edit', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
-router.delete('/gifts/delete/:giftId', NewopController.requireNewopAdmin, NewopController.deleteGift);
-router.post('/gifts/delete', NewopController.requireNewopAdmin, NewopController.deleteGift);
+const emojiUploadMiddleware = upload.fields([
+    { name: 'mediaFile', maxCount: 1 },
+    { name: 'media', maxCount: 1 }
+]);
+
+router.get('/emojis', NewopController.requireNewopAdmin, NewopController.getEmojis);
+router.post('/emojis/create', NewopController.requireNewopAdmin, emojiUploadMiddleware, NewopController.addEmoji);
+router.post('/emojis/add', NewopController.requireNewopAdmin, emojiUploadMiddleware, NewopController.addEmoji);
+router.put('/emojis/edit/:emojiId', NewopController.requireNewopAdmin, emojiUploadMiddleware, NewopController.editEmoji);
+router.post('/emojis/edit', NewopController.requireNewopAdmin, emojiUploadMiddleware, NewopController.editEmoji);
+router.delete('/emojis/delete/:emojiId', NewopController.requireNewopAdmin, NewopController.deleteEmoji);
+router.post('/emojis/delete', NewopController.requireNewopAdmin, NewopController.deleteEmoji);
 
 module.exports = router;
