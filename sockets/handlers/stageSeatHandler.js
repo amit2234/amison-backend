@@ -118,6 +118,33 @@ const stageSeatHandler = {
                 { $set: { [`seats.${seatIndex}`]: seat, updatedAt: new Date() } }
             ).catch(err => console.error('[StageSeatHandler] Mongo seat lock update error:', err.message));
         }
+    },
+
+    /**
+     * Handles Live Mic Stage Seat Animated Emoji Broadcast
+     */
+    async handleSendSeatEmoji(data, ws) {
+        const meta = roomChannelManager.getMetadata(ws);
+        const roomId = String(data.roomId || meta?.roomId || '').trim();
+        const slotIndex = data.slotIndex !== undefined ? Number(data.slotIndex) : (data.seatIndex !== undefined ? Number(data.seatIndex) : -1);
+        const senderId = String(data.senderId || meta?.userId || '').trim();
+        const mediaUrl = String(data.mediaUrl || data.emojiUrl || '').trim();
+
+        if (roomId && slotIndex >= 0 && slotIndex < 16 && mediaUrl) {
+            roomChannelManager.broadcastToRoom(roomId, {
+                type: 'seat_emoji_broadcast',
+                eventId: `evt_emoji_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`,
+                roomId,
+                slotIndex,
+                seatIndex: slotIndex,
+                senderId,
+                senderName: data.senderName || 'User',
+                emojiId: data.emojiId || '',
+                mediaUrl,
+                isSvga: Boolean(data.isSvga),
+                timestamp: Date.now()
+            });
+        }
     }
 };
 
