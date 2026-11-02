@@ -83,6 +83,10 @@ app.get('/api/gifts/active', (req, res) => {
 const emojisRoutes = require('./routes/emojis');
 app.use('/api/emojis', emojisRoutes);
 
+// 10. Merchant & Coin Seller REST API (/api/merchant)
+const merchantRoutes = require('./routes/merchant');
+app.use('/api/merchant', merchantRoutes);
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
 // ============================================================================
