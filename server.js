@@ -79,6 +79,10 @@ app.get('/api/gifts/active', (req, res) => {
     NewopController.getActiveGifts(req, res);
 });
 
+// 9. Emojis REST API (/api/emojis)
+const emojisRoutes = require('./routes/emojis');
+app.use('/api/emojis', emojisRoutes);
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
 // ============================================================================
