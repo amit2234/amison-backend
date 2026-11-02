@@ -5,6 +5,8 @@ const UserInventory = require('../models/UserInventory');
 const StorePurchase = require('../models/StorePurchase');
 const Wallet = require('../models/Wallet');
 const { upload, uploadBufferToCloudinary } = require('../services/cloudinaryService');
+const { requireNewopAdmin } = require('../middleware/authMiddleware');
+const NewopStoreService = require('../services/newopStoreService');
 
 // Default starter catalog for instant availability
 const DEFAULT_SEED_ITEMS = [
@@ -367,9 +369,84 @@ router.post('/unequip', async (req, res) => {
 });
 
 // ============================================================================
-// 6. POST /api/store/admin/upload (Upload Media & Create Item)
+// 6. ZERO-TRUST STORE ADMIN ENDPOINTS (/api/store/admin/*)
 // ============================================================================
-router.post('/admin/upload', upload.single('media'), async (req, res) => {
+
+// GET /api/store/admin/items - Fetch all store catalog items for admin management
+router.get('/admin/items', requireNewopAdmin, async (req, res) => {
+    try {
+        const items = await NewopStoreService.getAllStoreItems(req.callerUid);
+        res.json({ success: true, count: items.length, items });
+    } catch (err) {
+        console.error("❌ [Store Admin] Fetch Items Error:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/store/admin/add - Add a new Store Item
+router.post('/admin/add', requireNewopAdmin, async (req, res) => {
+    try {
+        const item = await NewopStoreService.addStoreItem(req.callerUid, req.body);
+        res.json({ success: true, message: 'Store item added successfully', item });
+    } catch (err) {
+        console.error("❌ [Store Admin] Add Item Error:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// PUT & POST /api/store/admin/edit - Edit Store Item
+router.put('/admin/edit/:itemId', requireNewopAdmin, async (req, res) => {
+    try {
+        const item = await NewopStoreService.editStoreItem(req.callerUid, req.params.itemId, req.body);
+        res.json({ success: true, message: 'Store item updated successfully', item });
+    } catch (err) {
+        console.error("❌ [Store Admin] Edit Item Error:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+router.post('/admin/edit', requireNewopAdmin, async (req, res) => {
+    try {
+        const item = await NewopStoreService.editStoreItem(req.callerUid, req.body.itemId, req.body);
+        res.json({ success: true, message: 'Store item updated successfully', item });
+    } catch (err) {
+        console.error("❌ [Store Admin] Edit Item Error:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// DELETE & POST /api/store/admin/delete - Delete/Deactivate Store Item
+router.delete('/admin/delete/:itemId', requireNewopAdmin, async (req, res) => {
+    try {
+        const item = await NewopStoreService.deleteStoreItem(req.callerUid, req.params.itemId);
+        res.json({ success: true, message: 'Store item deactivated successfully', item });
+    } catch (err) {
+        console.error("❌ [Store Admin] Delete Item Error:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+router.post('/admin/delete', requireNewopAdmin, async (req, res) => {
+    try {
+        const item = await NewopStoreService.deleteStoreItem(req.callerUid, req.body.itemId);
+        res.json({ success: true, message: 'Store item deactivated successfully', item });
+    } catch (err) {
+        console.error("❌ [Store Admin] Delete Item Error:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/store/admin/grant - Direct Admin Transfer/Gift of Store Item to Target User
+router.post('/admin/grant', requireNewopAdmin, async (req, res) => {
+    try {
+        const result = await NewopStoreService.grantItemToUser(req.callerUid, req.body);
+        res.json({ success: true, message: 'Item granted to target user successfully', result });
+    } catch (err) {
+        console.error("❌ [Store Admin] Grant Item Error:", err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// POST /api/store/admin/upload - Cloudinary Media Upload & Item Creation
+router.post('/admin/upload', requireNewopAdmin, upload.single('media'), async (req, res) => {
     try {
         const { name, category, price, rarity, validityDays, description, iconEmoji } = req.body;
         
@@ -384,14 +461,9 @@ router.post('/admin/upload', upload.single('media'), async (req, res) => {
             mediaUrl = req.body.mediaUrl;
         }
 
-        const prefix = category ? category.substring(0, 2).toLowerCase() : "st";
-        const randomStr = Math.random().toString(36).substring(2, 8);
-        const itemId = `${prefix}_${randomStr}`;
-
-        const newItem = await StoreItem.create({
-            itemId,
-            category: category || "Frames",
+        const item = await NewopStoreService.addStoreItem(req.callerUid, {
             name: name || "Custom Luxury Item",
+            category: category || "Frames",
             price: Number(price) || 500,
             iconEmoji: iconEmoji || "✨",
             mediaUrl,
@@ -400,7 +472,7 @@ router.post('/admin/upload', upload.single('media'), async (req, res) => {
             description: description || ""
         });
 
-        res.json({ success: true, item: newItem });
+        res.json({ success: true, item });
     } catch (err) {
         console.error("❌ [Store Admin Upload Error]:", err);
         res.status(500).json({ success: false, error: err.message });
