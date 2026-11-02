@@ -294,6 +294,53 @@ async function invalidateGiftsCatalogCache() {
     } catch (e) {}
 }
 
+// In-Memory RAM Cache for Banners
+const memoryBannersCache = {
+    HOME: null,
+    LOGIN: null
+};
+
+async function syncBannersCache(placement, bannersList) {
+    const key = (placement || 'HOME').toUpperCase();
+    memoryBannersCache[key] = bannersList;
+    if (!redisClient || redisClient.status !== 'ready' || !bannersList) return;
+    try {
+        await redisClient.set(`banners:active:${key}`, JSON.stringify(bannersList), 'EX', 3600); // 1hr TTL
+    } catch (e) {}
+}
+
+async function getCachedBanners(placement) {
+    const key = (placement || 'HOME').toUpperCase();
+    if (redisClient && redisClient.status === 'ready') {
+        try {
+            const cached = await redisClient.get(`banners:active:${key}`);
+            if (cached) return JSON.parse(cached);
+        } catch (e) {}
+    }
+    return memoryBannersCache[key];
+}
+
+async function invalidateBannersCache(placement) {
+    if (placement) {
+        const key = placement.toUpperCase();
+        memoryBannersCache[key] = null;
+        if (redisClient && redisClient.status === 'ready') {
+            try {
+                await redisClient.del(`banners:active:${key}`);
+            } catch (e) {}
+        }
+    } else {
+        memoryBannersCache.HOME = null;
+        memoryBannersCache.LOGIN = null;
+        if (redisClient && redisClient.status === 'ready') {
+            try {
+                await redisClient.del('banners:active:HOME');
+                await redisClient.del('banners:active:LOGIN');
+            } catch (e) {}
+        }
+    }
+}
+
 module.exports = {
     redisClient,
     onlineUsers,
@@ -320,5 +367,8 @@ module.exports = {
     invalidateUserInventoryCache,
     syncGiftsCatalogCache,
     getCachedGiftsCatalog,
-    invalidateGiftsCatalogCache
+    invalidateGiftsCatalogCache,
+    syncBannersCache,
+    getCachedBanners,
+    invalidateBannersCache
 };
