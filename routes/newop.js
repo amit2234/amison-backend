@@ -32,4 +32,20 @@ router.delete('/store/delete/:itemId', NewopController.requireNewopAdmin, NewopC
 router.post('/store/delete', NewopController.requireNewopAdmin, NewopController.deleteStoreItem);
 router.post('/store/grant', NewopController.requireNewopAdmin, NewopController.grantStoreItem);
 
+// Dynamic Voice Room Gifts Endpoints (100% Pure MongoDB + Cloudinary + Redis + WS)
+const { upload } = require('../services/cloudinaryService');
+const giftUploadMiddleware = upload.fields([
+    { name: 'iconFile', maxCount: 1 },
+    { name: 'animFile', maxCount: 1 }
+]);
+
+router.get('/gifts', NewopController.requireNewopAdmin, NewopController.getGifts);
+router.get('/gifts/active', NewopController.getActiveGifts);
+router.post('/gifts/create', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
+router.post('/gifts/add', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
+router.put('/gifts/edit/:giftId', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
+router.post('/gifts/edit', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
+router.delete('/gifts/delete/:giftId', NewopController.requireNewopAdmin, NewopController.deleteGift);
+router.post('/gifts/delete', NewopController.requireNewopAdmin, NewopController.deleteGift);
+
 module.exports = router;
