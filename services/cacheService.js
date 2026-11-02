@@ -263,6 +263,8 @@ async function invalidateUserInventoryCache(uid) {
     try {
         await redisClient.del(`store:inventory:${uid}`);
     } catch (e) {}
+}
+
 // 6. In-Memory Gift Catalog RAM Fallback (0ms instant response)
 let memoryGiftsCatalog = null;
 
