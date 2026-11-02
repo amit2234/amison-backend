@@ -220,6 +220,67 @@ const NewopController = {
             console.error('[NewopController] grantStoreItem error:', e);
             res.status(500).json({ success: false, error: e.message });
         }
+    },
+
+    // =========================================================================
+    // DYNAMIC GIFT CONTROLLERS (100% PURE MONGODB + CLOUDINARY + REDIS + WS)
+    // =========================================================================
+
+    async getGifts(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const gifts = await NewopGiftService.getAllGifts(req.callerUid);
+            res.json({ success: true, count: gifts.length, gifts });
+        } catch (e) {
+            console.error('[NewopController] getGifts error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async getActiveGifts(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const gifts = await NewopGiftService.getActiveGifts();
+            res.json({ success: true, count: gifts.length, gifts });
+        } catch (e) {
+            console.error('[NewopController] getActiveGifts error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async addGift(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const gift = await NewopGiftService.addGift(req.callerUid, req.body, req.files);
+            res.json({ success: true, message: 'Gift published successfully', gift });
+        } catch (e) {
+            console.error('[NewopController] addGift error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async editGift(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const { giftId } = req.params;
+            const gift = await NewopGiftService.editGift(req.callerUid, giftId || req.body.giftId, req.body, req.files);
+            res.json({ success: true, message: 'Gift updated successfully', gift });
+        } catch (e) {
+            console.error('[NewopController] editGift error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async deleteGift(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const { giftId } = req.params;
+            const gift = await NewopGiftService.deleteGift(req.callerUid, giftId || req.body.giftId);
+            res.json({ success: true, message: 'Gift deactivated successfully', gift });
+        } catch (e) {
+            console.error('[NewopController] deleteGift error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
     }
 };
 
