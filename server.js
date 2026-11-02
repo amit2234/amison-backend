@@ -92,6 +92,6 @@ const setupChatSocket = require('./sockets/chatSocket');
 setupChatSocket(server);
 
 // Start Gateway Server
-server.listen(PORT, () => {
-    console.log(`🚀 [Gateway] Amison Server running on port ${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 [Gateway] Amison Server running on port ${PORT}:${PORT}`);
 });
