@@ -51,9 +51,30 @@ const NewopGiftService = {
             return cached;
         }
 
-        const activeGifts = await Gift.find({ isActive: true })
+        let activeGifts = await Gift.find({ isActive: true })
             .sort({ sortOrder: 1, createdAt: -1 })
             .lean();
+
+        if (!activeGifts || activeGifts.length === 0) {
+            const defaultGifts = [
+                { giftId: 'golden_rose', name: 'Golden Rose', coinPrice: 1000, category: 'Popular', iconEmoji: '🌹', animationType: 'SVGA_ANIMATION', sortOrder: 1, isActive: true },
+                { giftId: 'love_fireworks', name: 'Galaxy Fireworks', coinPrice: 5000, category: 'Popular', iconEmoji: '🎆', animationType: 'SVGA_ANIMATION', sortOrder: 2, isActive: true },
+                { giftId: 'monsoon', name: 'Monsoon Love', coinPrice: 50000, category: 'Popular', iconEmoji: '🌧️', animationType: 'SVGA_ANIMATION', sortOrder: 3, isActive: true },
+                { giftId: 'sports_car', name: 'Supercar Ferrari', coinPrice: 80000, category: 'Luxury', iconEmoji: '🏎️', animationType: 'SVGA_ANIMATION', sortOrder: 4, isActive: true },
+                { giftId: 'cruise_ship_in', name: 'Luxury Ocean Yacht', coinPrice: 100000, category: 'Luxury', iconEmoji: '🚢', animationType: 'SVGA_ANIMATION', sortOrder: 5, isActive: true },
+                { giftId: 'magic_castle', name: 'Royal Magic Castle', coinPrice: 120000, category: 'Luxury', iconEmoji: '🏰', animationType: 'SVGA_ANIMATION', sortOrder: 6, isActive: true },
+                { giftId: 'galaxy_dragon', name: 'Mythic Fire Dragon', coinPrice: 200000, category: 'Exclusive', iconEmoji: '🐉', animationType: 'SVGA_ANIMATION', sortOrder: 7, isActive: true },
+                { giftId: 'diamond_crown', name: 'Crown Royale', coinPrice: 10000, category: 'Exclusive', iconEmoji: '👑', animationType: 'SVGA_ANIMATION', sortOrder: 8, isActive: true },
+                { giftId: 'lucky_star', name: 'Lucky Star', coinPrice: 200, category: 'Lucky', iconEmoji: '⭐', animationType: 'SVGA_ANIMATION', sortOrder: 9, isActive: true, isLucky: true, luckyMultiplierMax: 500 }
+            ];
+            try {
+                await Gift.insertMany(defaultGifts, { ordered: false });
+                activeGifts = await Gift.find({ isActive: true }).sort({ sortOrder: 1, createdAt: -1 }).lean();
+            } catch (seedErr) {
+                console.warn('[NewopGiftService] Starter gifts seed skipped:', seedErr.message);
+                activeGifts = defaultGifts;
+            }
+        }
 
         await cacheService.syncGiftsCatalogCache(activeGifts);
         return activeGifts;
