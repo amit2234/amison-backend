@@ -19,6 +19,10 @@ const roomSchema = new mongoose.Schema({
     onlineCount: { type: Number, default: 1 },
     heatScore: { type: Number, default: 0, index: true },
     totalCoinsEarned: { type: Number, default: 0, min: 0 },
+    isBlocked: { type: Boolean, default: false, index: true },
+    level: { type: Number, default: 1 },
+    coOwners: { type: [String], default: [] },
+    admins: { type: [String], default: [] },
     // 16-Seat Grid (4x4) Stage Management
     seats: {
         type: [{
