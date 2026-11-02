@@ -89,5 +89,23 @@ router.post('/banners/edit', NewopController.requireNewopAdmin, bannerUploadMidd
 router.delete('/banners/delete/:id', NewopController.requireNewopAdmin, bannerController.deleteBanner);
 router.post('/banners/delete', NewopController.requireNewopAdmin, bannerController.deleteBanner);
 
+// Level Management Endpoints (100% Dynamic MongoDB Atlas + Cloudinary + Redis, Zero Firestore)
+const LevelController = require('../controllers/levelController');
+const levelUploadMiddleware = upload.fields([
+    { name: 'iconFile', maxCount: 1 },
+    { name: 'image', maxCount: 1 }
+]);
+
+router.get('/levels', NewopController.requireNewopAdmin, LevelController.getAllLevels);
+router.get('/levels/all', NewopController.requireNewopAdmin, LevelController.getAllLevels);
+router.get('/levels/rules', NewopController.requireNewopAdmin, LevelController.getLevelRules);
+router.post('/levels/upsert', NewopController.requireNewopAdmin, levelUploadMiddleware, LevelController.upsertLevel);
+router.post('/levels/add', NewopController.requireNewopAdmin, levelUploadMiddleware, LevelController.upsertLevel);
+router.put('/levels/edit/:id', NewopController.requireNewopAdmin, levelUploadMiddleware, LevelController.upsertLevel);
+router.delete('/levels/delete/:id', NewopController.requireNewopAdmin, LevelController.deleteLevel);
+router.post('/levels/delete', NewopController.requireNewopAdmin, LevelController.deleteLevel);
+router.post('/levels/rules', NewopController.requireNewopAdmin, LevelController.updateRules);
+router.post('/levels/seed-defaults', NewopController.requireNewopAdmin, LevelController.seedDefaults);
+
 module.exports = router;
 
