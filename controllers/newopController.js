@@ -162,6 +162,64 @@ const NewopController = {
             console.error('[NewopController] updateZegoConfig error:', e);
             res.status(500).json({ success: false, error: e.message });
         }
+    },
+
+    // Store Management Endpoints (100% Backend-Driven)
+    async getStoreItems(req, res) {
+        try {
+            const NewopStoreService = require('../services/newopStoreService');
+            const items = await NewopStoreService.getAllStoreItems(req.callerUid);
+            res.json({ success: true, count: items.length, items });
+        } catch (e) {
+            console.error('[NewopController] getStoreItems error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async addStoreItem(req, res) {
+        try {
+            const NewopStoreService = require('../services/newopStoreService');
+            const item = await NewopStoreService.addStoreItem(req.callerUid, req.body);
+            res.json({ success: true, message: 'Store item added successfully', item });
+        } catch (e) {
+            console.error('[NewopController] addStoreItem error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async editStoreItem(req, res) {
+        try {
+            const NewopStoreService = require('../services/newopStoreService');
+            const { itemId } = req.params;
+            const item = await NewopStoreService.editStoreItem(req.callerUid, itemId || req.body.itemId, req.body);
+            res.json({ success: true, message: 'Store item updated successfully', item });
+        } catch (e) {
+            console.error('[NewopController] editStoreItem error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async deleteStoreItem(req, res) {
+        try {
+            const NewopStoreService = require('../services/newopStoreService');
+            const { itemId } = req.params;
+            const item = await NewopStoreService.deleteStoreItem(req.callerUid, itemId || req.body.itemId);
+            res.json({ success: true, message: 'Store item deleted/deactivated successfully', item });
+        } catch (e) {
+            console.error('[NewopController] deleteStoreItem error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async grantStoreItem(req, res) {
+        try {
+            const NewopStoreService = require('../services/newopStoreService');
+            const result = await NewopStoreService.grantItemToUser(req.callerUid, req.body);
+            res.json({ success: true, message: 'Item granted to user successfully', result });
+        } catch (e) {
+            console.error('[NewopController] grantStoreItem error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
     }
 };
 
