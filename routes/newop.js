@@ -74,5 +74,20 @@ router.get('/diamond/ledger', NewopController.requireNewopAdmin, DiamondFinanceC
 router.post('/diamond/adjust', NewopController.requireNewopAdmin, DiamondFinanceController.adjustDiamonds);
 router.post('/diamond/freeze-wallet', NewopController.requireNewopAdmin, DiamondFinanceController.setWalletStatus);
 
+// Banner & Login Page Management Endpoints (100% Dynamic MongoDB Atlas + Cloudinary + Redis, Zero Firestore)
+const bannerController = require('../controllers/bannerController');
+const bannerUploadMiddleware = upload.fields([
+    { name: 'bannerFile', maxCount: 1 },
+    { name: 'image', maxCount: 1 }
+]);
+
+router.get('/banners', NewopController.requireNewopAdmin, bannerController.getAllBanners);
+router.post('/banners/create', NewopController.requireNewopAdmin, bannerUploadMiddleware, bannerController.createBanner);
+router.post('/banners/add', NewopController.requireNewopAdmin, bannerUploadMiddleware, bannerController.createBanner);
+router.put('/banners/edit/:id', NewopController.requireNewopAdmin, bannerUploadMiddleware, bannerController.updateBanner);
+router.post('/banners/edit', NewopController.requireNewopAdmin, bannerUploadMiddleware, bannerController.updateBanner);
+router.delete('/banners/delete/:id', NewopController.requireNewopAdmin, bannerController.deleteBanner);
+router.post('/banners/delete', NewopController.requireNewopAdmin, bannerController.deleteBanner);
+
 module.exports = router;
 
