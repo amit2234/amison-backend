@@ -263,6 +263,33 @@ async function invalidateUserInventoryCache(uid) {
     try {
         await redisClient.del(`store:inventory:${uid}`);
     } catch (e) {}
+// 6. In-Memory Gift Catalog RAM Fallback (0ms instant response)
+let memoryGiftsCatalog = null;
+
+async function syncGiftsCatalogCache(giftsList) {
+    memoryGiftsCatalog = giftsList;
+    if (!redisClient || redisClient.status !== 'ready' || !giftsList) return;
+    try {
+        await redisClient.set('gifts:catalog:active', JSON.stringify(giftsList), 'EX', 86400); // 24hr TTL
+    } catch (e) {}
+}
+
+async function getCachedGiftsCatalog() {
+    if (redisClient && redisClient.status === 'ready') {
+        try {
+            const cached = await redisClient.get('gifts:catalog:active');
+            if (cached) return JSON.parse(cached);
+        } catch (e) {}
+    }
+    return memoryGiftsCatalog;
+}
+
+async function invalidateGiftsCatalogCache() {
+    memoryGiftsCatalog = null;
+    if (!redisClient || redisClient.status !== 'ready') return;
+    try {
+        await redisClient.del('gifts:catalog:active');
+    } catch (e) {}
 }
 
 module.exports = {
@@ -288,5 +315,8 @@ module.exports = {
     getCachedStoreCatalog,
     syncUserInventoryCache,
     getCachedUserInventory,
-    invalidateUserInventoryCache
+    invalidateUserInventoryCache,
+    syncGiftsCatalogCache,
+    getCachedGiftsCatalog,
+    invalidateGiftsCatalogCache
 };
