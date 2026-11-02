@@ -62,7 +62,7 @@ app.use('/api', friendsRoutes); // Backwards compatibility for /api/user/follow 
 const storeRoutes = require('./routes/store');
 app.use('/api/store', storeRoutes);
 
-// 6. Admin Panel Router (/api/newop)
+// 7. Admin Panel Router (/api/newop)
 try {
     const newopRoutes = require('./routes/newop');
     app.use('/api/newop', newopRoutes.router || newopRoutes);
@@ -72,6 +72,12 @@ try {
         console.error('⚠️ [Server] Error loading newop:', e.message);
     }
 }
+
+// 8. Dynamic Gifts Public API for Voice Rooms (/api/gifts/active)
+app.get('/api/gifts/active', (req, res) => {
+    const NewopController = require('./controllers/newopController');
+    NewopController.getActiveGifts(req, res);
+});
 
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
