@@ -107,5 +107,23 @@ router.post('/levels/delete', NewopController.requireNewopAdmin, LevelController
 router.post('/levels/rules', NewopController.requireNewopAdmin, LevelController.updateRules);
 router.post('/levels/seed-defaults', NewopController.requireNewopAdmin, LevelController.seedDefaults);
 
+// Withdrawal Management Endpoints (100% Zero-Trust MongoDB + Cloudinary, Zero Firestore)
+const WithdrawController = require('../controllers/withdrawController');
+const withdrawUploadMiddleware = upload.fields([
+    { name: 'screenshotFile', maxCount: 1 },
+    { name: 'image', maxCount: 1 }
+]);
+
+router.get('/withdraw/requests', NewopController.requireNewopAdmin, WithdrawController.getRequests);
+router.post('/withdraw/approve', NewopController.requireNewopAdmin, withdrawUploadMiddleware, WithdrawController.approveRequest);
+router.post('/withdraw/reject', NewopController.requireNewopAdmin, WithdrawController.rejectRequest);
+
+// BD Agent Management Endpoints (100% Zero-Trust MongoDB Atlas, Zero Firestore)
+const BdAgentController = require('../controllers/bdAgentController');
+router.get('/bd-agents', NewopController.requireNewopAdmin, BdAgentController.getAllAgents);
+router.post('/bd-agents/add', NewopController.requireNewopAdmin, BdAgentController.addAgent);
+router.post('/bd-agents/update', NewopController.requireNewopAdmin, BdAgentController.updateAgent);
+router.post('/bd-agents/remove', NewopController.requireNewopAdmin, BdAgentController.removeAgent);
+
 module.exports = router;
 
