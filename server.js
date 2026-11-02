@@ -87,6 +87,10 @@ app.use('/api/emojis', emojisRoutes);
 const merchantRoutes = require('./routes/merchant');
 app.use('/api/merchant', merchantRoutes);
 
+// 11. Dynamic Banners REST API (/api/banners)
+const bannersRoutes = require('./routes/banners');
+app.use('/api/banners', bannersRoutes);
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
 // ============================================================================
