@@ -172,6 +172,28 @@ const NewopController = {
             console.error('[NewopController] resetRoomPhotos error:', e);
             res.status(500).json({ success: false, error: e.message });
         }
+    },
+
+    async getZegoConfig(req, res) {
+        try {
+            const NewopZegoService = require('../services/newopZegoService');
+            const config = await NewopZegoService.getZegoConfig();
+            res.json({ success: true, config });
+        } catch (e) {
+            console.error('[NewopController] getZegoConfig error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async updateZegoConfig(req, res) {
+        try {
+            const NewopZegoService = require('../services/newopZegoService');
+            const updatedConfig = await NewopZegoService.updateZegoConfig(req.body);
+            res.json({ success: true, message: 'ZEGO RTC config updated successfully', config: updatedConfig });
+        } catch (e) {
+            console.error('[NewopController] updateZegoConfig error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
     }
 };
 
