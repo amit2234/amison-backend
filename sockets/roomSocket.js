@@ -27,12 +27,15 @@ async function broadcastPopularRooms(wss) {
     }
 }
 
+let globalRoomWss = null;
+
 /**
  * Dedicated Room & 16-Seat Stage Real-Time WebSocket Server
  * Path: '/ws/rooms'
  */
 function setupRoomSocket(server) {
     const wss = new WebSocket.Server({ server, path: '/ws/rooms' });
+    globalRoomWss = wss;
     console.log('🎙️ [RoomSocket] Dedicated 16-Seat Stage & Room WebSocket Server running on /ws/rooms');
 
     wss.on('connection', (ws, req) => {
@@ -305,6 +308,44 @@ function setupRoomSocket(server) {
                 }
 
                 // ============================================================
+                // D2. Real-Time Voice Room Gifting (0ms Latency Engine)
+                // ============================================================
+                else if (data.type === 'gift:send' || data.type === 'room:gift_send' || data.type === 'send_gift') {
+                    const giftService = require('../services/giftService');
+                    try {
+                        const targetRoomId = String(data.roomId || currentRoomId || '').trim();
+                        const senderUid = String(data.senderId || currentUserId || '').trim();
+                        const result = await giftService.sendGift({
+                            senderId: senderUid,
+                            receiverId: data.receiverId,
+                            giftId: data.giftId,
+                            giftCost: data.giftCost || data.coinCost,
+                            multiplier: data.multiplier || 1,
+                            roomId: targetRoomId,
+                            giftName: data.giftName,
+                            targetMicIndex: data.targetMicIndex !== undefined ? data.targetMicIndex : -1,
+                            txId: data.txId
+                        });
+
+                        ws.send(JSON.stringify({
+                            type: 'gift:ack',
+                            success: true,
+                            transactionId: result.transactionId,
+                            remainingCoins: result.remainingCoins,
+                            giftId: data.giftId
+                        }));
+                    } catch (giftErr) {
+                        console.warn('[RoomSocket] Gift execution failed:', giftErr.message);
+                        ws.send(JSON.stringify({
+                            type: 'gift:ack',
+                            success: false,
+                            error: giftErr.message,
+                            remainingCoins: giftErr.remainingCoins
+                        }));
+                    }
+                }
+
+                // ============================================================
                 // E. Keep-Alive Ping/Pong
                 // ============================================================
                 else if (data.type === 'ping') {
@@ -359,6 +400,14 @@ function setupRoomSocket(server) {
     });
 }
 
-setupRoomSocket.broadcastPopularRooms = broadcastPopularRooms;
-
-module.exports = setupRoomSocket;
+function broadcastGiftCatalogSync(payload) {
+    if (!globalRoomWss || !globalRoomWss.clients) return;
+    const packet = JSON.stringify({
+        type: 'gift_catalog_sync',
+        action: payload.action || 'sync',
+        gift: payload.gift,
+        gifts: payload.gifts
+    });
+    globalRoomWss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+   
