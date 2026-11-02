@@ -19,4 +19,8 @@ router.post('/room/update', NewopController.requireNewopAdmin, NewopController.u
 router.post('/room/block', NewopController.requireNewopAdmin, NewopController.blockRoom);
 router.post('/room/reset-photos', NewopController.requireNewopAdmin, NewopController.resetRoomPhotos);
 
+// ZEGO-RTC Configuration Endpoints
+router.get('/zego-config', NewopController.getZegoConfig);
+router.post('/zego-config', NewopController.requireNewopAdmin, NewopController.updateZegoConfig);
+
 module.exports = router;
