@@ -95,6 +95,11 @@ app.use('/api/banners', bannersRoutes);
 const levelsRoutes = require('./routes/levels');
 app.use('/api/levels', levelsRoutes);
 
+// 13. Withdraw REST API (/api/wallet/withdraw, /api/withdraw)
+const withdrawRoutes = require('./routes/withdraw');
+app.use('/api/wallet/withdraw', withdrawRoutes);
+app.use('/api/withdraw', withdrawRoutes);
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
 // ============================================================================
