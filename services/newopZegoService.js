@@ -1,4 +1,15 @@
 const { db } = require('../firebase');
+const NewopAuthService = require('./newopAuthService');
+
+async function verifyZeroTrustAdmin(callerUid) {
+  if (!callerUid) {
+    throw new Error('Zero-Trust Security Error: callerUid is missing');
+  }
+  const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(callerUid);
+  if (!isAuth) {
+    throw new Error('Zero-Trust Security Violation: Access denied for unauthorized UID');
+  }
+}
 
 /**
  * Service to manage ZEGO-RTC configuration in backend and Firestore.
@@ -7,8 +18,21 @@ class NewopZegoService {
   /**
    * Get active ZEGO-RTC config from Firestore collection 'system_config', doc 'zego'
    */
-  async getZegoConfig() {
+  async getZegoConfig(callerUid) {
+    if (callerUid) {
+      await verifyZeroTrustAdmin(callerUid);
+    }
     try {
+      if (!db) {
+        console.warn('⚠️ Firestore db is not initialized yet. Returning default Zego config.');
+        return {
+          rtcAppId: 0,
+          rtcAppSign: '',
+          chatAppId: 0,
+          chatAppSign: '',
+          isVoiceEnabled: true
+        };
+      }
       const docRef = db.collection('system_config').doc('zego');
       const docSnap = await docRef.get();
 
@@ -46,7 +70,8 @@ class NewopZegoService {
   /**
    * Update ZEGO-RTC config in Firestore collection 'system_config', doc 'zego'
    */
-  async updateZegoConfig(configData) {
+  async updateZegoConfig(callerUid, configData) {
+    await verifyZeroTrustAdmin(callerUid);
     try {
       const docRef = db.collection('system_config').doc('zego');
       const updatePayload = {
@@ -70,7 +95,7 @@ class NewopZegoService {
       }
 
       await docRef.set(updatePayload, { merge: true });
-      return await this.getZegoConfig();
+      return await this.getZegoConfig(callerUid);
     } catch (error) {
       console.error('Error updating ZEGO config in Firestore:', error);
       throw error;
