@@ -4,8 +4,7 @@ const WithdrawRequestSchema = new mongoose.Schema({
     requestId: {
         type: String,
         required: true,
-        unique: true,
-        index: true
+        unique: true
     },
     userId: {
         type: String,
@@ -58,8 +57,7 @@ const WithdrawRequestSchema = new mongoose.Schema({
     status: {
         type: String,
         enum: ['Pending', 'Successful', 'Reject'],
-        default: 'Pending',
-        index: true
+        default: 'Pending'
     },
     screenshotUrl: {
         type: String,
