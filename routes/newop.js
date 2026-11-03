@@ -125,5 +125,15 @@ router.post('/bd-agents/add', NewopController.requireNewopAdmin, BdAgentControll
 router.post('/bd-agents/update', NewopController.requireNewopAdmin, BdAgentController.updateAgent);
 router.post('/bd-agents/remove', NewopController.requireNewopAdmin, BdAgentController.removeAgent);
 
+// Agency Management Endpoints (100% Zero-Trust MongoDB Atlas, Zero Firestore)
+const AgencyController = require('../controllers/agencyController');
+router.get('/agencies', NewopController.requireNewopAdmin, AgencyController.getAllAgencies);
+router.post('/agencies/create', NewopController.requireNewopAdmin, AgencyController.createAgency);
+router.post('/agencies/update', NewopController.requireNewopAdmin, AgencyController.updateAgency);
+router.post('/agencies/block', NewopController.requireNewopAdmin, AgencyController.blockAgency);
+router.get('/agencies/:id/hosts', NewopController.requireNewopAdmin, AgencyController.getAgencyHosts);
+router.post('/agencies/hosts/add', NewopController.requireNewopAdmin, AgencyController.addHost);
+router.post('/agencies/hosts/remove', NewopController.requireNewopAdmin, AgencyController.removeHost);
+
 module.exports = router;
 
