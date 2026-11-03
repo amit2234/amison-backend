@@ -495,4 +495,41 @@ const merchantService = {
      * Get all merchant transactions for Newop History Tab
      */
     async getAllTransactions({ limit = 100, page = 1 } = {}) {
-        const lim = Math.
+        const lim = Math.min(Number(limit) || 100, 200);
+        const skip = (Math.max(Number(page) || 1, 1) - 1) * lim;
+
+        const [items, total] = await Promise.all([
+            MerchantTransaction.find({})
+                .sort({ createdAt: -1 })
+                .skip(skip)
+                .limit(lim)
+                .lean(),
+            MerchantTransaction.countDocuments({})
+        ]);
+
+        return { items, total, page: Number(page) || 1, limit: lim };
+    },
+
+    /**
+     * Get details for single Merchant including live stock
+     */
+    async getMerchantDetails(userId) {
+        const userDoc = await resolveUser(userId);
+        if (!userDoc) return null;
+
+        const merchant = await Merchant.findOne({ uid: userDoc.uid, status: { $ne: 'revoked' } }).lean();
+        if (!merchant) return null;
+
+        return {
+            ...merchant,
+            userId: userDoc.uid,
+            numericId: userDoc.numericId,
+            name: userDoc.name,
+            avatarUrl: userDoc.avatarUrl,
+            email: userDoc.email,
+            level: userDoc.level
+        };
+    }
+};
+
+module.exports = merchantService;
