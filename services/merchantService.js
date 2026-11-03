@@ -10,63 +10,89 @@ const { resolveUser } = require('../utils/userResolver');
 const merchantService = {
     /**
      * Get all registered Merchants & Sellers for Newop Management
+     * Populates user profile info (name, numericId, avatar, email) from User collection.
      */
     async getAllMerchants({ role, status } = {}) {
         const query = {};
-        if (role) query.role = role.toLowerCase();
         if (status) {
             query.status = status.toLowerCase();
         } else {
             query.status = { $ne: 'revoked' };
         }
-        return await Merchant.find(query).sort({ updatedAt: -1 }).lean();
+
+        const merchants = await Merchant.find(query).sort({ updatedAt: -1 }).lean();
+        
+        // Enrich merchants with user profile data from users collection (normalized architecture)
+        const enriched = await Promise.all(merchants.map(async (m) => {
+            const userDoc = await User.findOne({ uid: m.uid }).lean();
+            return {
+                ...m,
+                userId: m.uid, // backward compatibility alias
+                numericId: userDoc ? userDoc.numericId : 'N/A',
+                name: userDoc ? userDoc.name : 'Unknown Seller',
+                avatarUrl: userDoc ? userDoc.avatarUrl : '',
+                email: userDoc ? userDoc.email : '',
+                level: userDoc ? userDoc.level : 1
+            };
+        }));
+
+        if (role) {
+            // Optional role filter if needed (or roleTagline matching)
+            const roleLower = role.toLowerCase();
+            return enriched.filter(m => (m.roleTagline || '').toLowerCase().includes(roleLower) || roleLower === 'seller');
+        }
+
+        return enriched;
     },
 
     /**
-     * Promote a user to Seller or Marchent role in MongoDB
+     * Promote a user to Seller / Merchant role in MongoDB
      */
-    async addOrUpdateMerchant({ userId, role = 'seller', assignedBy = 'Super Master' }) {
+    async addOrUpdateMerchant({ userId, roleTagline = 'Authorized Seller', dailyTransferLimit = 10000 }) {
         const userDoc = await resolveUser(userId);
         if (!userDoc) {
             throw new Error(`User not found with ID: ${userId}`);
         }
 
-        const validRole = role.toLowerCase() === 'marchent' ? 'marchent' : 'seller';
-
         const updated = await Merchant.findOneAndUpdate(
-            { userId: userDoc.uid },
+            { uid: userDoc.uid },
             {
                 $set: {
-                    userId: userDoc.uid,
-                    numericId: String(userDoc.numericId),
-                    name: userDoc.name || 'User',
-                    avatarUrl: userDoc.avatarUrl || '',
-                    role: validRole,
+                    uid: userDoc.uid,
+                    roleTagline: roleTagline || 'Authorized Seller',
+                    dailyTransferLimit: Number(dailyTransferLimit) || 10000,
                     status: 'active',
-                    assignedBy,
                     updatedAt: new Date()
+                },
+                $setOnInsert: {
+                    sellingStock: 50000, // Initial protected vault stock for new merchants
+                    totalSold: 0,
+                    dailyTransferredToday: 0,
+                    createdAt: new Date()
                 }
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }
         ).lean();
 
-        return updated;
+        return {
+            ...updated,
+            userId: updated.uid,
+            numericId: userDoc.numericId,
+            name: userDoc.name,
+            avatarUrl: userDoc.avatarUrl,
+            email: userDoc.email
+        };
     },
 
     /**
-     * Revoke or remove Seller / Marchent role
+     * Revoke or remove Seller / Merchant role
      */
-    async removeMerchant({ userId, role }) {
+    async removeMerchant({ userId }) {
         const userDoc = await resolveUser(userId);
         const uid = userDoc ? userDoc.uid : String(userId).trim();
 
-        const query = { userId: uid };
-        if (role) {
-            query.role = role.toLowerCase();
-        }
-
         const removed = await Merchant.findOneAndUpdate(
-            query,
+            { uid },
             {
                 $set: {
                     status: 'revoked',
@@ -93,7 +119,7 @@ const merchantService = {
             throw new Error(`Target user not found: ${targetUserId}`);
         }
 
-        const merchantDoc = await Merchant.findOne({ userId: userDoc.uid });
+        const merchantDoc = await Merchant.findOne({ uid: userDoc.uid });
         if (!merchantDoc || merchantDoc.status === 'revoked') {
             throw new Error('Target user is not registered as an active Merchant or Seller');
         }
@@ -102,19 +128,18 @@ const merchantService = {
         const stockAfter = stockBefore + numAmount;
 
         merchantDoc.sellingStock = stockAfter;
-        merchantDoc.totalAllocated = (merchantDoc.totalAllocated || 0) + numAmount;
         merchantDoc.updatedAt = new Date();
         await merchantDoc.save();
 
         const txId = `TX_ALLOC_${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
         await MerchantTransaction.create({
             txId,
-            merchantId: merchantDoc.userId,
-            merchantNumericId: merchantDoc.numericId,
-            merchantName: merchantDoc.name,
-            targetUserId: merchantDoc.userId,
-            targetNumericId: merchantDoc.numericId,
-            targetName: merchantDoc.name,
+            merchantId: userDoc.uid,
+            merchantNumericId: String(userDoc.numericId),
+            merchantName: userDoc.name,
+            targetUserId: userDoc.uid,
+            targetNumericId: String(userDoc.numericId),
+            targetName: userDoc.name,
             coins: numAmount,
             merchantStockBefore: stockBefore,
             merchantStockAfter: stockAfter,
@@ -125,7 +150,13 @@ const merchantService = {
 
         return {
             success: true,
-            merchant: merchantDoc.toObject(),
+            merchant: {
+                ...merchantDoc.toObject(),
+                userId: userDoc.uid,
+                numericId: userDoc.numericId,
+                name: userDoc.name,
+                avatarUrl: userDoc.avatarUrl
+            },
             allocatedAmount: numAmount,
             newStock: stockAfter,
             txId
@@ -174,8 +205,15 @@ const merchantService = {
         // 4. Redis / In-Memory Mutex Lock on Merchant UID (Anti-Double-Spending)
         return await cacheService.withUserLock(merchantUserDoc.uid, async () => {
             // Check merchant active status & sufficient stock
-            const merchant = await Merchant.findOne({ userId: merchantUserDoc.uid });
-            if (!merchant || merchant.status !== 'active') {
+            let merchant = await Merchant.findOne({ uid: merchantUserDoc.uid });
+            if (!merchant) {
+                merchant = await Merchant.create({
+                    uid: merchantUserDoc.uid,
+                    sellingStock: 50000,
+                    status: 'active',
+                    roleTagline: 'Authorized Seller'
+                });
+            } else if (merchant.status !== 'active') {
                 const err = new Error('You are not authorized as an active Merchant or Seller');
                 err.status = 403;
                 throw err;
@@ -196,7 +234,6 @@ const merchantService = {
                 session.startTransaction();
                 useTransaction = true;
             } catch (sessErr) {
-                // Standalone fallback if replica set not configured
                 useTransaction = false;
                 if (session) session.endSession();
                 session = null;
@@ -205,10 +242,10 @@ const merchantService = {
             try {
                 const sessionOpts = useTransaction ? { session } : {};
 
-                // A. Deduct stock from Merchant atomically
+                // A. Deduct stock from Merchant atomically (sellingStock is protected and uneditable directly by user)
                 const updatedMerchant = await Merchant.findOneAndUpdate(
                     {
-                        userId: merchantUserDoc.uid,
+                        uid: merchantUserDoc.uid,
                         sellingStock: { $gte: coinsToTransfer }
                     },
                     {
@@ -241,12 +278,12 @@ const merchantService = {
                 }
 
                 // C. Create immutable Merchant Transaction Audit record
-                const txRecord = await MerchantTransaction.create([{
+                await MerchantTransaction.create([{
                     txId,
                     idempotencyKey: txId,
-                    merchantId: merchant.userId,
-                    merchantNumericId: merchant.numericId,
-                    merchantName: merchant.name,
+                    merchantId: merchantUserDoc.uid,
+                    merchantNumericId: String(merchantUserDoc.numericId),
+                    merchantName: merchantUserDoc.name,
                     targetUserId: targetUserDoc.uid,
                     targetNumericId: String(targetUserDoc.numericId),
                     targetName: targetUserDoc.name || 'User',
@@ -257,7 +294,7 @@ const merchantService = {
                     userCoinsAfter: updatedUser.coins,
                     txType: 'MERCHANT_RECHARGE',
                     status: 'SUCCESS',
-                    note: note || `Recharged by Seller ${merchant.name} (${merchant.numericId})`
+                    note: note || `Recharged by Seller ${merchantUserDoc.name} (${merchantUserDoc.numericId})`
                 }], sessionOpts);
 
                 // D. Record in General Wallet Transactions for recipient user's passbook
@@ -273,12 +310,10 @@ const merchantService = {
                     createdAt: new Date()
                 }], sessionOpts);
 
-                // Commit session
                 if (useTransaction && session) {
                     await session.commitTransaction();
                 }
 
-                // E. Sync In-Memory Cache
                 await cacheService.syncWalletCache(targetUserDoc.uid, updatedUser.coins, updatedUser.diamonds || 0);
 
                 return {
@@ -351,8 +386,18 @@ const merchantService = {
         const userDoc = await resolveUser(userId);
         if (!userDoc) return null;
 
-        const merchant = await Merchant.findOne({ userId: userDoc.uid, status: { $ne: 'revoked' } }).lean();
-        return merchant;
+        const merchant = await Merchant.findOne({ uid: userDoc.uid, status: { $ne: 'revoked' } }).lean();
+        if (!merchant) return null;
+
+        return {
+            ...merchant,
+            userId: userDoc.uid,
+            numericId: userDoc.numericId,
+            name: userDoc.name,
+            avatarUrl: userDoc.avatarUrl,
+            email: userDoc.email,
+            level: userDoc.level
+        };
     }
 };
 
