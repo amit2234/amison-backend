@@ -1,3 +1,4 @@
+
 const mongoose = require('mongoose');
 
 // ============================================================================
@@ -5,7 +6,7 @@ const mongoose = require('mongoose');
 // Dedicated collection to lock Newop master access strictly to authorized UIDs
 // ============================================================================
 const newopAdminSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth UID
+    uid: { type: String, required: true, unique: true }, // Permanent Firebase Auth UID
     adminName: { type: String, default: 'Super Master' },
     role: { type: String, enum: ['super_admin', 'super_master', 'admin'], default: 'super_admin' },
     passwordHash: { type: String, default: '123456' },
