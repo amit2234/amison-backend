@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 // MONGOOSE SCHEMA: MERCHANT TRANSACTIONS AUDIT LEDGER (Immutable)
 // ============================================================================
 const merchantTxSchema = new mongoose.Schema({
-    txId: { type: String, required: true, unique: true, index: true },
+    txId: { type: String, required: true, unique: true },
     idempotencyKey: { type: String, default: null, sparse: true, index: true },
     merchantId: { type: String, required: true, index: true }, // UID
     merchantNumericId: { type: String, default: '' },
