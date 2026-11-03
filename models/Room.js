@@ -5,9 +5,9 @@ const mongoose = require('mongoose');
 // Permanent link with Owner UID - 6-Digit Display ID - 16-Seat Grid
 // ============================================================================
 const roomSchema = new mongoose.Schema({
-    roomId: { type: String, required: true, unique: true, index: true }, // Strictly equal to ownerUid for permanent 1:1 link
-    ownerUid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth UID
-    displayRoomId: { type: String, required: true, unique: true, index: true }, // Exact 6-digit room display ID (e.g. "100251")
+    roomId: { type: String, required: true, unique: true }, // Strictly equal to ownerUid for permanent 1:1 link
+    ownerUid: { type: String, required: true, unique: true }, // Permanent Firebase Auth UID
+    displayRoomId: { type: String, required: true, unique: true }, // Exact 6-digit room display ID (e.g. "100251")
     roomName: { type: String, required: true, trim: true }, // Room Title / Name
     roomPhotoUrl: { type: String, default: "" }, // Room profile photo URL
     backgroundUrl: { type: String, default: "" }, // Room custom background URL
