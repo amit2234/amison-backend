@@ -67,13 +67,15 @@ const merchantTransferService = {
     },
 
     /**
-     * 100% Zero-Trust & Hack-Proof Merchant User Recharge
+     * 100% Zero-Trust & Hack-Proof Merchant User Recharge / Stock Transfer
      */
-    async rechargeUser({ merchantUid, targetUserId, coins, idempotencyKey, note = '' }) {
+    async rechargeUser({ merchantUid, targetUserId, coins, transferType = 'COINS', idempotencyKey, note = '' }) {
         const coinsToTransfer = Math.floor(Number(coins) || 0);
         if (coinsToTransfer <= 0) {
             throw new Error('Coins amount must be greater than 0');
         }
+
+        const normTransferType = String(transferType || 'COINS').toUpperCase() === 'STOCK' ? 'STOCK' : 'COINS';
 
         const merchantUserDoc = await resolveUser(merchantUid);
         if (!merchantUserDoc) {
@@ -138,6 +140,7 @@ const merchantTransferService = {
             try {
                 const sessionOpts = useTransaction ? { session } : {};
 
+                // 1. Deduct from Seller's Selling Stock
                 const updatedMerchant = await Merchant.findOneAndUpdate(
                     {
                         uid: merchantUserDoc.uid,
@@ -158,70 +161,141 @@ const merchantTransferService = {
                     throw new Error('Transaction aborted: Insufficient selling stock during atomic execution');
                 }
 
-                const updatedUser = await User.findOneAndUpdate(
-                    { uid: targetUserDoc.uid },
-                    {
-                        $inc: { coins: coinsToTransfer },
-                        $set: { updatedAt: new Date() }
-                    },
-                    { new: true, ...sessionOpts }
-                ).lean();
+                if (normTransferType === 'STOCK') {
+                    // STOCK TRANSFER: Transfer coins from Seller Stock to Target Seller's Stock
+                    const targetMerchant = await Merchant.findOneAndUpdate(
+                        { uid: targetUserDoc.uid },
+                        {
+                            $inc: { sellingStock: coinsToTransfer },
+                            $set: { updatedAt: new Date(), status: 'active' },
+                            $setOnInsert: {
+                                role: 'seller',
+                                roleTagline: 'Authorized Seller',
+                                totalSold: 0,
+                                dailyTransferredToday: 0,
+                                createdAt: new Date()
+                            }
+                        },
+                        { upsert: true, new: true, ...sessionOpts }
+                    ).lean();
 
-                if (!updatedUser) {
-                    throw new Error('Target user account not found during atomic execution');
+                    await User.updateOne(
+                        { uid: targetUserDoc.uid },
+                        {
+                            $set: {
+                                isSeller: true,
+                                sellerCenterRole: targetMerchant.role || 'seller',
+                                updatedAt: new Date()
+                            }
+                        },
+                        sessionOpts
+                    );
+
+                    await MerchantTransaction.create([{
+                        txId,
+                        idempotencyKey: txId,
+                        merchantId: merchantUserDoc.uid,
+                        merchantNumericId: String(merchantUserDoc.numericId),
+                        merchantName: merchantUserDoc.name,
+                        targetUserId: targetUserDoc.uid,
+                        targetNumericId: String(targetUserDoc.numericId),
+                        targetName: targetUserDoc.name || 'Seller',
+                        coins: coinsToTransfer,
+                        merchantStockBefore: merchant.sellingStock,
+                        merchantStockAfter: updatedMerchant.sellingStock,
+                        userCoinsBefore: (targetMerchant.sellingStock || coinsToTransfer) - coinsToTransfer,
+                        userCoinsAfter: targetMerchant.sellingStock || coinsToTransfer,
+                        txType: 'STOCK_TRANSFER',
+                        status: 'SUCCESS',
+                        note: note || `Stock Transfer from Seller ${merchantUserDoc.name} (${merchantUserDoc.numericId})`
+                    }], sessionOpts);
+
+                    if (useTransaction && session) {
+                        await session.commitTransaction();
+                    }
+
+                    return {
+                        success: true,
+                        txId,
+                        transferType: 'STOCK',
+                        coinsTransferred: coinsToTransfer,
+                        remainingStock: updatedMerchant.sellingStock,
+                        targetUser: {
+                            uid: targetUserDoc.uid,
+                            numericId: targetUserDoc.numericId,
+                            name: targetUserDoc.name,
+                            newBalance: targetMerchant.sellingStock
+                        },
+                        createdAt: new Date().toISOString()
+                    };
+
+                } else {
+                    // NORMAL COINS RECHARGE: Transfer coins from Seller Stock to Target User's Normal Coins Wallet
+                    const updatedUser = await User.findOneAndUpdate(
+                        { uid: targetUserDoc.uid },
+                        {
+                            $inc: { coins: coinsToTransfer },
+                            $set: { updatedAt: new Date() }
+                        },
+                        { new: true, ...sessionOpts }
+                    ).lean();
+
+                    if (!updatedUser) {
+                        throw new Error('Target user account not found during atomic execution');
+                    }
+
+                    await MerchantTransaction.create([{
+                        txId,
+                        idempotencyKey: txId,
+                        merchantId: merchantUserDoc.uid,
+                        merchantNumericId: String(merchantUserDoc.numericId),
+                        merchantName: merchantUserDoc.name,
+                        targetUserId: targetUserDoc.uid,
+                        targetNumericId: String(targetUserDoc.numericId),
+                        targetName: targetUserDoc.name || 'User',
+                        coins: coinsToTransfer,
+                        merchantStockBefore: merchant.sellingStock,
+                        merchantStockAfter: updatedMerchant.sellingStock,
+                        userCoinsBefore: targetUserDoc.coins || 0,
+                        userCoinsAfter: updatedUser.coins,
+                        txType: 'MERCHANT_RECHARGE',
+                        status: 'SUCCESS',
+                        note: note || `Recharged by Seller ${merchantUserDoc.name} (${merchantUserDoc.numericId})`
+                    }], sessionOpts);
+
+                    await WalletTransaction.create([{
+                        txId: `WTX_${txId}`,
+                        type: 'ADMIN_ADJUST',
+                        senderUid: merchantUserDoc.uid,
+                        receiverUid: targetUserDoc.uid,
+                        coinsDelta: coinsToTransfer,
+                        diamondsDelta: 0,
+                        senderCoinsAfter: updatedMerchant.sellingStock,
+                        roomId: '',
+                        createdAt: new Date()
+                    }], sessionOpts);
+
+                    if (useTransaction && session) {
+                        await session.commitTransaction();
+                    }
+
+                    await cacheService.syncWalletCache(targetUserDoc.uid, updatedUser.coins, updatedUser.diamonds || 0);
+
+                    return {
+                        success: true,
+                        txId,
+                        transferType: 'COINS',
+                        coinsTransferred: coinsToTransfer,
+                        remainingStock: updatedMerchant.sellingStock,
+                        targetUser: {
+                            uid: targetUserDoc.uid,
+                            numericId: targetUserDoc.numericId,
+                            name: targetUserDoc.name,
+                            newBalance: updatedUser.coins
+                        },
+                        createdAt: new Date().toISOString()
+                    };
                 }
-
-                await MerchantTransaction.create([{
-                    txId,
-                    idempotencyKey: txId,
-                    merchantId: merchantUserDoc.uid,
-                    merchantNumericId: String(merchantUserDoc.numericId),
-                    merchantName: merchantUserDoc.name,
-                    targetUserId: targetUserDoc.uid,
-                    targetNumericId: String(targetUserDoc.numericId),
-                    targetName: targetUserDoc.name || 'User',
-                    coins: coinsToTransfer,
-                    merchantStockBefore: merchant.sellingStock,
-                    merchantStockAfter: updatedMerchant.sellingStock,
-                    userCoinsBefore: targetUserDoc.coins || 0,
-                    userCoinsAfter: updatedUser.coins,
-                    txType: 'MERCHANT_RECHARGE',
-                    status: 'SUCCESS',
-                    note: note || `Recharged by Seller ${merchantUserDoc.name} (${merchantUserDoc.numericId})`
-                }], sessionOpts);
-
-                await WalletTransaction.create([{
-                    txId: `WTX_${txId}`,
-                    type: 'ADMIN_ADJUST',
-                    senderUid: merchantUserDoc.uid,
-                    receiverUid: targetUserDoc.uid,
-                    coinsDelta: coinsToTransfer,
-                    diamondsDelta: 0,
-                    senderCoinsAfter: updatedMerchant.sellingStock,
-                    roomId: '',
-                    createdAt: new Date()
-                }], sessionOpts);
-
-                if (useTransaction && session) {
-                    await session.commitTransaction();
-                }
-
-                await cacheService.syncWalletCache(targetUserDoc.uid, updatedUser.coins, updatedUser.diamonds || 0);
-
-                return {
-                    success: true,
-                    txId,
-                    coinsTransferred: coinsToTransfer,
-                    remainingStock: updatedMerchant.sellingStock,
-                    targetUser: {
-                        uid: targetUserDoc.uid,
-                        numericId: targetUserDoc.numericId,
-                        name: targetUserDoc.name,
-                        newBalance: updatedUser.coins
-                    },
-                    createdAt: new Date().toISOString()
-                };
-
             } catch (txError) {
                 if (useTransaction && session) {
                     try {
