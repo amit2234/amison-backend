@@ -113,7 +113,7 @@ const merchantController = {
      */
     async rechargeUser(req, res) {
         try {
-            const { merchantUid, targetUserId, coins, idempotencyKey, note } = req.body;
+            const { merchantUid, targetUserId, coins, transferType, idempotencyKey, note } = req.body;
             if (!merchantUid || !targetUserId || !coins) {
                 return res.status(400).json({
                     success: false,
@@ -125,6 +125,7 @@ const merchantController = {
                 merchantUid,
                 targetUserId,
                 coins,
+                transferType: transferType || 'COINS',
                 idempotencyKey,
                 note
             });
