@@ -91,8 +91,8 @@ const merchantTransferService = {
             throw err;
         }
 
-        if (merchantUserDoc.uid === targetUserDoc.uid) {
-            throw new Error('Cannot transfer stock coins to your own account');
+        if (normTransferType === 'STOCK' && merchantUserDoc.uid === targetUserDoc.uid) {
+            throw new Error('Cannot transfer seller stock to your own seller stock');
         }
 
         const txId = (idempotencyKey && String(idempotencyKey).trim()) || `TX_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
