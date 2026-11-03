@@ -6,18 +6,20 @@ const cacheService = require('../services/cacheService');
  * Protects Merchant recharge and transfer operations
  */
 async function idempotencyLockMiddleware(req, res, next) {
-    const { merchantUid, targetUserId, idempotencyKey } = req.body;
-    const key = idempotencyKey || `${merchantUid || 'anon'}_${targetUserId || 'anon'}_${req.body.coins || 0}`;
+    const { merchantUid, targetUserId, coins, transferType } = req.body;
+    
+    // Construct rate-limit key for identical recharge: same merchant + target user + coin amount + transfer type
+    const rateLimitKey = `recharge_rate_${merchantUid || 'anon'}_${targetUserId || 'anon'}_${coins || 0}_${transferType || 'COINS'}`;
 
-    // 1. Check RAM Idempotency
-    if (!cacheService.checkAndMarkIdempotency(key)) {
-        return res.status(409).json({
+    // 1. Check RAM Idempotency with 1 minute (60,000 ms) cool-down window
+    if (!cacheService.checkAndMarkIdempotency(rateLimitKey, 60000)) {
+        return res.status(429).json({
             success: false,
-            message: 'Duplicate recharge request blocked by Idempotency Lock'
+            message: 'Please wait 1 minute before repeating the same recharge amount to this user'
         });
     }
 
-    // 2. Check Redis Lock
+    // 2. Check Redis Lock for brief concurrency (3 sec)
     const lockKey = `recharge:${merchantUid || 'global'}`;
     const acquired = await acquireLock(lockKey, 5);
 
