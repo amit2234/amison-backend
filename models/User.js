@@ -18,6 +18,9 @@ const userSchema = new mongoose.Schema({
     diamonds: { type: Number, default: 0, min: 0 }, // Diamonds Balance (Me -> Wallet)
     level: { type: Number, default: 1, min: 1 }, // User Level
     role: { type: String, default: "user" }, // user, admin, super_admin, etc.
+    isSeller: { type: Boolean, default: false },
+    isMerchant: { type: Boolean, default: false },
+    sellerCenterRole: { type: String, default: "" }, // "seller", "marchent", or ""
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });
