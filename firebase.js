@@ -76,5 +76,6 @@ try {
 module.exports = {
     admin,
     auth: isInitialized ? admin.auth() : null,
+    db: isInitialized ? admin.firestore() : null,
     isFirebaseInitialized: () => isInitialized
 };
