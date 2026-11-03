@@ -8,9 +8,9 @@ try {
     let credential = null;
 
     // 1. Check if service account JSON is passed directly as environment variable (Render / Heroku)
-    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT && process.env.FIREBASE_SERVICE_ACCOUNT.trim().length > 0) {
         try {
-            const parsed = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            const parsed = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT.trim());
             credential = admin.credential.cert(parsed);
             console.log('🔥 [Firebase Admin] Initialized from FIREBASE_SERVICE_ACCOUNT environment variable');
         } catch (parseErr) {
@@ -22,9 +22,16 @@ try {
     if (!credential) {
         const renderSecretPath = '/etc/secrets/serviceAccountKey.json';
         if (fs.existsSync(renderSecretPath)) {
-            const serviceAccount = require(renderSecretPath);
-            credential = admin.credential.cert(serviceAccount);
-            console.log('🔥 [Firebase Admin] Initialized from Render Secret File (/etc/secrets/serviceAccountKey.json)');
+            try {
+                const fileContent = fs.readFileSync(renderSecretPath, 'utf8').trim();
+                if (fileContent.length > 0) {
+                    const serviceAccount = JSON.parse(fileContent);
+                    credential = admin.credential.cert(serviceAccount);
+                    console.log('🔥 [Firebase Admin] Initialized from Render Secret File (/etc/secrets/serviceAccountKey.json)');
+                }
+            } catch (err) {
+                console.warn('⚠️ [Firebase Admin] Failed parsing Render secret file:', err.message);
+            }
         }
     }
 
@@ -38,10 +45,17 @@ try {
 
         for (const p of localPaths) {
             if (fs.existsSync(p)) {
-                const serviceAccount = require(p);
-                credential = admin.credential.cert(serviceAccount);
-                console.log(`🔥 [Firebase Admin] Initialized from local file (${p})`);
-                break;
+                try {
+                    const fileContent = fs.readFileSync(p, 'utf8').trim();
+                    if (fileContent.length > 0) {
+                        const serviceAccount = JSON.parse(fileContent);
+                        credential = admin.credential.cert(serviceAccount);
+                        console.log(`🔥 [Firebase Admin] Initialized from local file (${p})`);
+                        break;
+                    }
+                } catch (err) {
+                    console.warn(`⚠️ [Firebase Admin] Failed loading ${p}: ${err.message}`);
+                }
             }
         }
     }
