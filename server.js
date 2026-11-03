@@ -104,6 +104,13 @@ app.use('/api/withdraw', withdrawRoutes);
 const agencyRoutes = require('./routes/agency');
 app.use('/api/agencies', agencyRoutes);
 
+// 15. Games REST API (/api/newop/games & /api/games)
+const gamesRoutes = require('./routes/games');
+app.use('/api/newop/games', gamesRoutes);
+app.use('/api/games', gamesRoutes);
+const path = require('path');
+app.use('/games', express.static(path.join(__dirname, 'public/games')));
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
 // ============================================================================
