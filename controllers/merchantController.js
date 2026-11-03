@@ -20,19 +20,38 @@ const merchantController = {
      */
     async addMerchant(req, res) {
         try {
-            const { userId, role, assignedBy } = req.body;
-            if (!userId) {
-                return res.status(400).json({ success: false, message: 'userId is required' });
+            const { userId, targetNumericId, numericId, role, roleTagline, assignedBy } = req.body;
+            const targetId = userId || targetNumericId || numericId;
+            if (!targetId) {
+                return res.status(400).json({ success: false, message: 'userId or targetNumericId is required' });
             }
             const merchant = await merchantService.addOrUpdateMerchant({
-                userId,
+                userId: targetId,
                 role: role || 'seller',
-                assignedBy: assignedBy || 'Super Master'
+                roleTagline,
+                assignedBy: assignedBy || req.callerUid || 'Super Master'
             });
             res.json({ success: true, message: `User promoted to ${merchant.role}`, data: merchant });
         } catch (error) {
             console.error('❌ [MerchantController] addMerchant error:', error);
             res.status(400).json({ success: false, message: error.message });
+        }
+    },
+
+    /**
+     * User: Get my live merchant / seller authorization status for Me tab
+     */
+    async getMyStatus(req, res) {
+        try {
+            const userId = req.params.userId || req.query.userId || req.callerUid;
+            if (!userId) {
+                return res.status(400).json({ success: false, message: 'userId is required' });
+            }
+            const status = await merchantService.getMyMerchantStatus(userId);
+            res.json({ success: true, data: status });
+        } catch (error) {
+            console.error('❌ [MerchantController] getMyStatus error:', error);
+            res.status(500).json({ success: false, message: error.message });
         }
     },
 
