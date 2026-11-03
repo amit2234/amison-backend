@@ -67,8 +67,7 @@ const AgencySchema = new mongoose.Schema({
     status: {
         type: String,
         enum: ['Active', 'Blocked', 'Pending'],
-        default: 'Active',
-        index: true
+        default: 'Active'
     },
     createdBy: {
         type: String,
