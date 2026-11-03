@@ -6,7 +6,7 @@ const mongoose = require('mongoose');
 // are stored in the 'users' collection and referenced via 'uid'.
 // ============================================================================
 const merchantSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth UID matching users collection
+    uid: { type: String, required: true, unique: true }, // Permanent Firebase Auth UID matching users collection
     sellingStock: { 
         type: Number, 
         default: 50000, 
@@ -22,7 +22,7 @@ const merchantSchema = new mongoose.Schema({
         default: 'seller', 
         index: true 
     },
-    status: { type: String, enum: ['active', 'suspended', 'revoked'], default: 'active', index: true },
+    status: { type: String, enum: ['active', 'suspended', 'revoked'], default: 'active' },
     roleTagline: { type: String, default: 'Authorized Seller' }, // Seller level / badge tagline (like user level tag)
     assignedByUid: { type: String, default: '' },
     assignedByName: { type: String, default: 'Super Master Admin' },
@@ -31,7 +31,6 @@ const merchantSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now }
 }, { collection: 'merchants' });
 
-merchantSchema.index({ status: 1 });
 merchantSchema.index({ role: 1, status: 1 });
 
 const Merchant = mongoose.models.Merchant || mongoose.model('Merchant', merchantSchema);
