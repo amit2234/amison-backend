@@ -82,16 +82,23 @@ class LevelController {
                 }
             }
 
-            const roomPerks = typeof body.roomPerks === 'string'
-                ? JSON.parse(body.roomPerks)
-                : (body.roomPerks || {
+            let roomPerks = {};
+            if (typeof body.roomPerks === 'string' && body.roomPerks.trim().length > 0) {
+                try {
+                    roomPerks = JSON.parse(body.roomPerks);
+                } catch (e) {
+                    roomPerks = {};
+                }
+            } else {
+                roomPerks = body.roomPerks || {
                     adminCount: body.adminCount,
                     coAdminCount: body.coAdminCount,
                     passwordEnabled: body.passwordEnabled,
                     gamesEnabled: body.gamesEnabled,
                     rewardType: body.rewardType,
                     rewardUrl: body.rewardUrl
-                });
+                };
+            }
 
             const levelData = {
                 category: body.category,
