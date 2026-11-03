@@ -100,6 +100,10 @@ const withdrawRoutes = require('./routes/withdraw');
 app.use('/api/wallet/withdraw', withdrawRoutes);
 app.use('/api/withdraw', withdrawRoutes);
 
+// 14. Agency REST API (/api/agencies)
+const agencyRoutes = require('./routes/agency');
+app.use('/api/agencies', agencyRoutes);
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
 // ============================================================================
