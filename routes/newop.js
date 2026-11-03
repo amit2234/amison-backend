@@ -62,6 +62,7 @@ router.post('/emojis/delete', NewopController.requireNewopAdmin, NewopController
 const MerchantController = require('../controllers/merchantController');
 router.get('/merchants', NewopController.requireNewopAdmin, MerchantController.getAllMerchants);
 router.post('/merchants/add', NewopController.requireNewopAdmin, MerchantController.addMerchant);
+router.post('/merchants/assign-role', NewopController.requireNewopAdmin, MerchantController.addMerchant);
 router.post('/merchants/remove', NewopController.requireNewopAdmin, MerchantController.removeMerchant);
 router.post('/merchants/allocate-stock', NewopController.requireNewopAdmin, MerchantController.allocateStock);
 router.get('/merchants/transactions', NewopController.requireNewopAdmin, MerchantController.getAllTransactions);
