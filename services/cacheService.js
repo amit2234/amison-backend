@@ -38,13 +38,13 @@ const memoryUnreadMap = new Map();
 const processedTxIds = new Map(); // txId -> timestamp
 const userLocks = new Map();      // uid -> Promise chain
 
-// Cleanup expired idempotency keys every 5 minutes
+// Cleanup expired idempotency keys every 1 minute
 setInterval(() => {
-    const cutoff = Date.now() - 10 * 60 * 1000;
+    const cutoff = Date.now() - 60 * 1000;
     for (const [key, ts] of processedTxIds.entries()) {
         if (ts < cutoff) processedTxIds.delete(key);
     }
-}, 5 * 60 * 1000);
+}, 60 * 1000);
 
 /**
  * Serializes concurrent operations for the same user on a single Node instance
@@ -63,14 +63,16 @@ function withUserLock(uid, fn) {
 }
 
 /**
- * Checks 0-Trust Idempotency to block Replay Attacks / duplicate rapid clicks
+ * Checks 0-Trust Idempotency to block Replay Attacks / duplicate rapid clicks within ttlMs (default 60000ms)
  */
-function checkAndMarkIdempotency(txId) {
+function checkAndMarkIdempotency(txId, ttlMs = 60000) {
     if (!txId) return true;
-    if (processedTxIds.has(txId)) {
+    const now = Date.now();
+    const existing = processedTxIds.get(txId);
+    if (existing && (now - existing < ttlMs)) {
         return false;
     }
-    processedTxIds.set(txId, Date.now());
+    processedTxIds.set(txId, now);
     return true;
 }
 
