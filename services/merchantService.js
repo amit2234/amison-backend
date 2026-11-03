@@ -37,9 +37,8 @@ const merchantService = {
         }));
 
         if (role) {
-            // Optional role filter if needed (or roleTagline matching)
-            const roleLower = role.toLowerCase();
-            return enriched.filter(m => (m.roleTagline || '').toLowerCase().includes(roleLower) || roleLower === 'seller');
+            const roleLower = role.toLowerCase().includes('marchent') ? 'marchent' : 'seller';
+            return enriched.filter(m => (m.role === roleLower) || (m.roleTagline || '').toLowerCase().includes(roleLower));
         }
 
         return enriched;
@@ -48,10 +47,27 @@ const merchantService = {
     /**
      * Promote a user to Seller / Merchant role in MongoDB
      */
-    async addOrUpdateMerchant({ userId, roleTagline = 'Authorized Seller', dailyTransferLimit = 10000 }) {
+    async addOrUpdateMerchant({ userId, role = 'seller', roleTagline, dailyTransferLimit, assignedBy = 'Super Master' }) {
         const userDoc = await resolveUser(userId);
         if (!userDoc) {
             throw new Error(`User not found with ID: ${userId}`);
+        }
+
+        const roleLower = String(role || 'seller').toLowerCase().includes('marchent') ? 'marchent' : 'seller';
+        const defaultTagline = roleLower === 'marchent' ? 'Authorized Merchant' : 'Authorized Seller';
+        const effectiveTagline = roleTagline || defaultTagline;
+        const initialStock = roleLower === 'marchent' ? 100000 : 50000;
+        const transferLimit = roleLower === 'marchent' ? 500000 : 50000;
+
+        // Resolve assigner details
+        let assignerName = 'Super Master Admin';
+        let assignerAvatar = '';
+        if (assignedBy && assignedBy !== 'Super Master') {
+            const assignerDoc = await resolveUser(assignedBy);
+            if (assignerDoc) {
+                assignerName = assignerDoc.name || 'Super Master Admin';
+                assignerAvatar = assignerDoc.avatarUrl || '';
+            }
         }
 
         const updated = await Merchant.findOneAndUpdate(
@@ -59,13 +75,17 @@ const merchantService = {
             {
                 $set: {
                     uid: userDoc.uid,
-                    roleTagline: roleTagline || 'Authorized Seller',
-                    dailyTransferLimit: Number(dailyTransferLimit) || 10000,
+                    role: roleLower,
+                    roleTagline: effectiveTagline,
+                    dailyTransferLimit: Number(dailyTransferLimit) || transferLimit,
                     status: 'active',
+                    assignedByUid: String(assignedBy || ''),
+                    assignedByName: assignerName,
+                    assignedByAvatar: assignerAvatar,
                     updatedAt: new Date()
                 },
                 $setOnInsert: {
-                    sellingStock: 50000, // Initial protected vault stock for new merchants
+                    sellingStock: initialStock, // Initial protected vault stock for new merchants/sellers
                     totalSold: 0,
                     dailyTransferredToday: 0,
                     createdAt: new Date()
@@ -74,13 +94,124 @@ const merchantService = {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         ).lean();
 
+        // Update User collection with authorization flags
+        await User.updateOne(
+            { uid: userDoc.uid },
+            {
+                $set: {
+                    isSeller: true,
+                    isMerchant: roleLower === 'marchent',
+                    sellerCenterRole: roleLower
+                }
+            }
+        );
+
+        // Create official congratulatory notice in Message collection
+        try {
+            const Message = require('../models/Message');
+            await Message.create({
+                conversationId: `CONV_SYSTEM_${userDoc.uid}`,
+                senderId: 'AMISON_OFFICIAL',
+                recipientId: userDoc.uid,
+                type: 'official_role_announcement',
+                text: roleLower === 'marchent'
+                    ? `Congratulations 🎉! You have been appointed as an official Merchant by ${assignerName}. Your dedicated Seller Stock is now active. Access Marchent Centre from your Me tab.`
+                    : `Congratulations 🎉! You have been appointed as an official Seller by ${assignerName}. Your dedicated Seller Stock is now active. Access Seller Centre from your Me tab.`,
+                metadata: {
+                    assignedRole: roleLower,
+                    promoterUid: String(assignedBy || ''),
+                    promoterName: assignerName,
+                    promoterAvatar: assignerAvatar,
+                    stockAllocated: updated.sellingStock || initialStock
+                },
+                isRead: false
+            });
+        } catch (msgErr) {
+            console.error('⚠️ [MerchantService] Failed to create system notice message:', msgErr.message);
+        }
+
+        // 1. Send WebSocket Realtime Event for instant 0ms state change in Android client (Me tab unlocks immediately)
+        cacheService.emitToUser(userDoc.uid, {
+            type: 'ROLE_AUTHORIZATION_CHANGED',
+            role: roleLower,
+            centerTitle: roleLower === 'marchent' ? 'Marchent Centre' : 'Seller Centre',
+            stock: updated.sellingStock || initialStock,
+            isAuthorized: true,
+            timestamp: Date.now()
+        });
+
+        cacheService.emitToUser(userDoc.uid, {
+            type: 'role:updated',
+            role: roleLower,
+            roleTagline: effectiveTagline,
+            timestamp: Date.now()
+        });
+
+        // 2. Send AMISON Official Realtime Message to target user
+        const sysMessage = {
+            type: 'dm:receive',
+            messageId: `SYS_MSG_${Date.now()}`,
+            conversationId: `CONV_SYSTEM_${userDoc.uid}`,
+            senderId: 'AMISON_OFFICIAL',
+            senderName: 'AMISON Official',
+            senderAvatar: assignerAvatar || '',
+            text: roleLower === 'marchent'
+                ? `Congratulations 🎉! You have been appointed as an official Merchant by ${assignerName}. Your dedicated Seller Stock is now active. Access Marchent Centre from your Me tab.`
+                : `Congratulations 🎉! You have been appointed as an official Seller by ${assignerName}. Your dedicated Seller Stock is now active. Access Seller Centre from your Me tab.`,
+            messageType: 'official_announcement',
+            timestamp: Date.now(),
+            promotedBy: {
+                name: assignerName,
+                avatar: assignerAvatar
+            },
+            role: roleLower
+        };
+        cacheService.emitToUser(userDoc.uid, sysMessage);
+
+        // 3. Broadcast to all NewOp Admins so their lists update live
+        cacheService.broadcastToAll({
+            type: 'NEWOP_LIST_UPDATED',
+            user: {
+                uid: userDoc.uid,
+                numericId: userDoc.numericId,
+                name: userDoc.name,
+                avatarUrl: userDoc.avatarUrl,
+                role: roleLower,
+                sellingStock: updated.sellingStock || initialStock
+            }
+        });
+
         return {
             ...updated,
             userId: updated.uid,
             numericId: userDoc.numericId,
             name: userDoc.name,
             avatarUrl: userDoc.avatarUrl,
-            email: userDoc.email
+            email: userDoc.email,
+            role: roleLower
+        };
+    },
+
+    /**
+     * Get user's current live Merchant/Seller authorization and status
+     */
+    async getMyMerchantStatus(userId) {
+        const userDoc = await resolveUser(userId);
+        if (!userDoc) {
+            return { isAuthorized: false, role: null, centerTitle: null, stock: 0 };
+        }
+        const merchant = await Merchant.findOne({ uid: userDoc.uid, status: 'active' }).lean();
+        if (!merchant) {
+            return { isAuthorized: false, role: null, centerTitle: null, stock: 0 };
+        }
+        const role = merchant.role || (merchant.roleTagline?.toLowerCase().includes('marchent') ? 'marchent' : 'seller');
+        return {
+            isAuthorized: true,
+            role: role,
+            centerTitle: role === 'marchent' ? 'Marchent Centre' : 'Seller Centre',
+            stock: merchant.sellingStock || 0,
+            assignedByName: merchant.assignedByName || 'Super Master Admin',
+            assignedByAvatar: merchant.assignedByAvatar || ''
         };
     },
 
@@ -364,41 +495,4 @@ const merchantService = {
      * Get all merchant transactions for Newop History Tab
      */
     async getAllTransactions({ limit = 100, page = 1 } = {}) {
-        const lim = Math.min(Number(limit) || 100, 200);
-        const skip = (Math.max(Number(page) || 1, 1) - 1) * lim;
-
-        const [items, total] = await Promise.all([
-            MerchantTransaction.find({})
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(lim)
-                .lean(),
-            MerchantTransaction.countDocuments({})
-        ]);
-
-        return { items, total, page: Number(page) || 1, limit: lim };
-    },
-
-    /**
-     * Get details for single Merchant including live stock
-     */
-    async getMerchantDetails(userId) {
-        const userDoc = await resolveUser(userId);
-        if (!userDoc) return null;
-
-        const merchant = await Merchant.findOne({ uid: userDoc.uid, status: { $ne: 'revoked' } }).lean();
-        if (!merchant) return null;
-
-        return {
-            ...merchant,
-            userId: userDoc.uid,
-            numericId: userDoc.numericId,
-            name: userDoc.name,
-            avatarUrl: userDoc.avatarUrl,
-            email: userDoc.email,
-            level: userDoc.level
-        };
-    }
-};
-
-module.exports = merchantService;
+        const lim = Math.
