@@ -22,6 +22,8 @@ const userSchema = new mongoose.Schema({
     updatedAt: { type: Date, default: Date.now }
 });
 
+userSchema.index({ uid: 1 }, { unique: true });
+userSchema.index({ numericId: 1 }, { unique: true });
 userSchema.index({ uid: 1, email: 1 });
 
 const User = mongoose.models.User || mongoose.model('User', userSchema);
