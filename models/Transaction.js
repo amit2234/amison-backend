@@ -4,7 +4,7 @@ const mongoose = require('mongoose');
 // MONGOOSE SCHEMA: WALLET TRANSACTIONS LEDGER (Immutable Passbook)
 // ============================================================================
 const walletTransactionSchema = new mongoose.Schema({
-    txId: { type: String, required: true, unique: true, index: true },
+    txId: { type: String, required: true, unique: true },
     type: {
         type: String,
         enum: ['GIFT_SEND', 'GIFT_MULTI', 'CONVERT_DIAMOND_TO_COIN', 'WITHDRAW_DIAMOND', 'GUILD_TRANSFER', 'ADMIN_ADJUST'],
