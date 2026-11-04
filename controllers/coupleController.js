@@ -88,15 +88,23 @@ const coupleController = {
                 return res.status(400).json({ success: false, error: 'User ID is required' });
             }
 
-            const invites = await CoupleInvitation.find({
-                receiverId: uid,
-                status: 'PENDING',
-                expiresAt: { $gt: new Date() }
-            }).sort({ createdAt: -1 }).lean();
+            const formatted = invites.map(inv => ({
+                invitationId: inv.invitationId,
+                senderId: inv.senderId,
+                senderName: inv.senderProfile?.name || 'User',
+                senderAvatar: inv.senderProfile?.avatar || '',
+                receiverId: inv.receiverId,
+                receiverName: inv.receiverProfile?.name || '',
+                receiverAvatar: inv.receiverProfile?.avatar || '',
+                proposalMessage: inv.proposalText || '',
+                status: inv.status,
+                createdAt: new Date(inv.createdAt).getTime(),
+                expiresAt: new Date(inv.expiresAt).getTime()
+            }));
 
             return res.json({
                 success: true,
-                invitations: invites
+                invitations: formatted
             });
         } catch (error) {
             console.error('❌ [CoupleController.getPendingInvitations] Error:', error);
