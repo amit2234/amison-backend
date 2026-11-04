@@ -1,5 +1,8 @@
-const { db } = require('../firebase');
+const ZegoConfig = require('../models/ZegoConfig');
 const NewopAuthService = require('./newopAuthService');
+
+// In-Memory RAM Local Cache for 0ms ultra-fast response
+let ramZegoCache = null;
 
 async function verifyZeroTrustAdmin(callerUid) {
   if (!callerUid) {
@@ -12,54 +15,50 @@ async function verifyZeroTrustAdmin(callerUid) {
 }
 
 /**
- * Service to manage ZEGO-RTC configuration in backend and Firestore.
+ * Service to manage ZEGO-RTC configuration in Node.js MongoDB Atlas + 0ms RAM Local Cache.
  */
 class NewopZegoService {
   /**
-   * Get active ZEGO-RTC config from Firestore collection 'system_config', doc 'zego'
+   * Get active ZEGO-RTC config from MongoDB + RAM Local Cache
    */
   async getZegoConfig(callerUid) {
     if (callerUid) {
       await verifyZeroTrustAdmin(callerUid);
     }
+
+    // Return instant 0ms RAM Cache if available
+    if (ramZegoCache) {
+      return ramZegoCache;
+    }
+
     try {
-      if (!db) {
-        console.warn('⚠️ Firestore db is not initialized yet. Returning default Zego config.');
-        return {
-          rtcAppId: 0,
-          rtcAppSign: '',
-          chatAppId: 0,
-          chatAppSign: '',
-          isVoiceEnabled: true
-        };
-      }
-      const docRef = db.collection('system_config').doc('zego');
-      const docSnap = await docRef.get();
-
-      if (docSnap.exists) {
-        const data = docSnap.data();
-        return {
-          rtcAppId: Number(data.rtcAppId || 0),
-          rtcAppSign: String(data.rtcAppSign || ''),
-          chatAppId: Number(data.chatAppId || 0),
-          chatAppSign: String(data.chatAppSign || ''),
-          isVoiceEnabled: data.isVoiceEnabled !== false
-        };
+      let doc = await ZegoConfig.findOne({ configKey: 'global_zego' }).lean();
+      if (!doc) {
+        // Seed initial default document if not present in MongoDB
+        doc = await ZegoConfig.create({
+          configKey: 'global_zego',
+          rtcAppId: 638484,
+          rtcAppSign: 'be235c9670fdcd2cff8d18641bcc92b3dffe49448bf87bfc833a',
+          isVoiceEnabled: true,
+          updatedAt: new Date()
+        });
+        if (doc && doc.toObject) doc = doc.toObject();
       }
 
-      // Default fallback if not yet set in database
-      return {
-        rtcAppId: 0,
-        rtcAppSign: '',
-        chatAppId: 0,
-        chatAppSign: '',
-        isVoiceEnabled: true
+      ramZegoCache = {
+        rtcAppId: Number(doc.rtcAppId || 0),
+        rtcAppSign: String(doc.rtcAppSign || ''),
+        chatAppId: Number(doc.chatAppId || 0),
+        chatAppSign: String(doc.chatAppSign || ''),
+        isVoiceEnabled: doc.isVoiceEnabled !== false
       };
+
+      return ramZegoCache;
     } catch (error) {
-      console.error('Error fetching ZEGO config from Firestore:', error);
-      return {
-        rtcAppId: 0,
-        rtcAppSign: '',
+      console.error('Error fetching ZEGO config from MongoDB Atlas:', error);
+      return ramZegoCache || {
+        rtcAppId: 638484,
+        rtcAppSign: 'be235c9670fdcd2cff8d18641bcc92b3dffe49448bf87bfc833a',
         chatAppId: 0,
         chatAppSign: '',
         isVoiceEnabled: true
@@ -68,36 +67,52 @@ class NewopZegoService {
   }
 
   /**
-   * Update ZEGO-RTC config in Firestore collection 'system_config', doc 'zego'
+   * Update ZEGO-RTC config in MongoDB Atlas and refresh RAM Local Cache
    */
   async updateZegoConfig(callerUid, configData) {
-    await verifyZeroTrustAdmin(callerUid);
+    if (callerUid) {
+      await verifyZeroTrustAdmin(callerUid);
+    }
+
     try {
-      const docRef = db.collection('system_config').doc('zego');
       const updatePayload = {
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date()
       };
 
-      if (configData.rtcAppId !== undefined && configData.rtcAppId > 0) {
+      if (configData.rtcAppId !== undefined && configData.rtcAppId !== null) {
         updatePayload.rtcAppId = Number(configData.rtcAppId);
       }
-      if (configData.rtcAppSign) {
+      if (configData.rtcAppSign !== undefined) {
         updatePayload.rtcAppSign = String(configData.rtcAppSign).trim();
       }
-      if (configData.chatAppId !== undefined && configData.chatAppId > 0) {
+      if (configData.chatAppId !== undefined && configData.chatAppId !== null) {
         updatePayload.chatAppId = Number(configData.chatAppId);
       }
-      if (configData.chatAppSign) {
+      if (configData.chatAppSign !== undefined) {
         updatePayload.chatAppSign = String(configData.chatAppSign).trim();
       }
       if (configData.isVoiceEnabled !== undefined) {
         updatePayload.isVoiceEnabled = Boolean(configData.isVoiceEnabled);
       }
 
-      await docRef.set(updatePayload, { merge: true });
-      return await this.getZegoConfig(callerUid);
+      const updatedDoc = await ZegoConfig.findOneAndUpdate(
+        { configKey: 'global_zego' },
+        { $set: updatePayload },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      ).lean();
+
+      ramZegoCache = {
+        rtcAppId: Number(updatedDoc.rtcAppId || 0),
+        rtcAppSign: String(updatedDoc.rtcAppSign || ''),
+        chatAppId: Number(updatedDoc.chatAppId || 0),
+        chatAppSign: String(updatedDoc.chatAppSign || ''),
+        isVoiceEnabled: updatedDoc.isVoiceEnabled !== false
+      };
+
+      console.log('✅ [NewopZegoService] ZEGO Config updated in MongoDB Atlas & RAM Local Cache:', ramZegoCache);
+      return ramZegoCache;
     } catch (error) {
-      console.error('Error updating ZEGO config in Firestore:', error);
+      console.error('Error updating ZEGO config in MongoDB Atlas:', error);
       throw error;
     }
   }
