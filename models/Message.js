@@ -11,7 +11,7 @@ const messageSchema = new mongoose.Schema({
     text: { type: String, required: true, trim: true },
     type: { 
         type: String, 
-        enum: ['text', 'official_notice', 'official_role_announcement', 'gift', 'system'], 
+        enum: ['text', 'official_notice', 'official_role_announcement', 'official_couple_invite', 'gift', 'system'], 
         default: 'text',
         index: true
     },
@@ -21,7 +21,12 @@ const messageSchema = new mongoose.Schema({
         promoterName: { type: String, default: 'Amison Management' },
         promoterAvatar: { type: String, default: '' }, // Cloudinary Image URL
         stockAllocated: { type: Number, default: 0 },
-        badge: { type: String, default: '' }
+        badge: { type: String, default: '' },
+        invitationId: { type: String, default: '' },
+        senderUid: { type: String, default: '' },
+        senderName: { type: String, default: '' },
+        senderAvatar: { type: String, default: '' },
+        proposalText: { type: String, default: '' }
     },
     isRead: { type: Boolean, default: false, index: true },
     createdAt: { type: Date, default: Date.now, index: true }
