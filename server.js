@@ -111,6 +111,10 @@ app.use('/api/games', gamesRoutes);
 const path = require('path');
 app.use('/games', express.static(path.join(__dirname, 'public/games')));
 
+// 16. Couple Partner REST API (/api/couple)
+const coupleRoutes = require('./routes/couple');
+app.use('/api/couple', coupleRoutes);
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS
 // ============================================================================
