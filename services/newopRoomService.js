@@ -1,37 +1,56 @@
 const mongoose = require('mongoose');
 const Room = require('../models/Room');
 const User = require('../models/User');
+const NewopAuthService = require('./newopAuthService');
 
 const getCoreUserModel = () => mongoose.models.User || User;
+
+async function verifyZeroTrustAdmin(callerUid) {
+    if (!callerUid) {
+        throw new Error('Zero-Trust Security Error: callerUid is missing');
+    }
+    const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(callerUid);
+    if (!isAuth) {
+        throw new Error('Zero-Trust Security Violation: Access denied for unauthorized UID');
+    }
+}
 
 const NewopRoomService = {
     /**
      * Fetch all rooms for Newop Room management
      */
-    async getAllRooms() {
+    async getAllRooms(callerUid) {
+        await verifyZeroTrustAdmin(callerUid);
+
         const rooms = await Room.find({}).sort({ updatedAt: -1 }).limit(200).lean();
-        return rooms.map(r => ({
-            docId: r._id.toString(),
-            roomId: r.displayRoomId || r.roomId,
-            publicRoomId: r.displayRoomId || r.roomId,
-            ownerUid: r.ownerUid || '',
-            name: r.roomName || 'Voice Room',
-            category: r.category || 'Voice Party',
-            announcement: r.announcement || '',
-            photoUrl: r.roomPhotoUrl || '',
-            isLive: r.isLive === true,
-            isBlocked: r.isBlocked === true,
-            isPinned: r.isPinned === true,
-            onlineCount: r.onlineCount || 0,
-            heatScore: r.heatScore || 0,
-            updatedAt: r.updatedAt
-        }));
+        return rooms.map(r => {
+            const activeOnline = Number(r.onlineCount || 0);
+            const internalDocId = r.ownerUid || r.roomId || r._id.toString();
+            return {
+                docId: internalDocId,
+                roomId: r.displayRoomId || r.roomId,
+                publicRoomId: r.displayRoomId || r.roomId,
+                ownerUid: r.ownerUid || internalDocId,
+                name: r.roomName || 'Voice Room',
+                category: r.category || 'Voice Party',
+                announcement: r.announcement || '',
+                photoUrl: r.roomPhotoUrl || '',
+                isLive: activeOnline > 0 && r.isBlocked !== true,
+                isBlocked: r.isBlocked === true,
+                isPinned: r.isPinned === true,
+                onlineCount: activeOnline,
+                heatScore: r.heatScore || 0,
+                updatedAt: r.updatedAt
+            };
+        });
     },
 
     /**
      * Fetch single room info for Newop Room View Info
      */
-    async getRoomInfo(id) {
+    async getRoomInfo(callerUid, id) {
+        await verifyZeroTrustAdmin(callerUid);
+
         const targetId = String(id || '').trim();
         if (!targetId) throw new Error('Room ID is required');
 
@@ -121,8 +140,10 @@ const NewopRoomService = {
     /**
      * Update room details
      */
-    async updateRoomDetails(data) {
-        const { roomId, roomName, displayRoomId, level, coOwners, admins } = data;
+    async updateRoomDetails(callerUid, data) {
+        await verifyZeroTrustAdmin(callerUid);
+
+        const { roomId, roomName, displayRoomId, level, coOwners, admins } = data || {};
         const targetId = String(roomId || displayRoomId || '').trim();
         if (!targetId) throw new Error('roomId is required');
 
@@ -149,7 +170,9 @@ const NewopRoomService = {
     /**
      * Block or unblock room
      */
-    async blockOrUnblockRoom(roomId, isBlocked) {
+    async blockOrUnblockRoom(callerUid, roomId, isBlocked) {
+        await verifyZeroTrustAdmin(callerUid);
+
         const targetId = String(roomId || '').trim();
         if (!targetId) throw new Error('roomId is required');
 
@@ -166,7 +189,9 @@ const NewopRoomService = {
     /**
      * Reset room photo & reset room name to default format: room-{displayRoomId}
      */
-    async resetRoomPhotos(roomId) {
+    async resetRoomPhotos(callerUid, roomId) {
+        await verifyZeroTrustAdmin(callerUid);
+
         const targetId = String(roomId || '').trim();
         if (!targetId) throw new Error('roomId is required');
 
