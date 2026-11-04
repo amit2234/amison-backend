@@ -343,6 +343,44 @@ async function invalidateBannersCache(placement) {
     }
 }
 
+// In-Memory RAM Cache for Couple Partner Bonds: uid => Bond Object
+const memoryCoupleBonds = new Map();
+
+async function syncCoupleBondCache(uid, bondData) {
+    if (!uid) return;
+    const cleanUid = String(uid).trim();
+    memoryCoupleBonds.set(cleanUid, bondData);
+    if (redisClient && redisClient.status === 'ready' && bondData) {
+        try {
+            await redisClient.set(`cp:bond:${cleanUid}`, JSON.stringify(bondData), 'EX', 3600); // 1hr TTL
+        } catch (e) {}
+    }
+}
+
+async function getCachedCoupleBond(uid) {
+    if (!uid) return null;
+    const cleanUid = String(uid).trim();
+    if (redisClient && redisClient.status === 'ready') {
+        try {
+            const cached = await redisClient.get(`cp:bond:${cleanUid}`);
+            if (cached) return JSON.parse(cached);
+        } catch (e) {}
+    }
+    return memoryCoupleBonds.get(cleanUid) || null;
+}
+
+async function invalidateCoupleBondCache(uid1, uid2) {
+    const uids = [uid1, uid2].filter(Boolean).map(u => String(u).trim());
+    for (const uid of uids) {
+        memoryCoupleBonds.delete(uid);
+        if (redisClient && redisClient.status === 'ready') {
+            try {
+                await redisClient.del(`cp:bond:${uid}`);
+            } catch (e) {}
+        }
+    }
+}
+
 module.exports = {
     redisClient,
     onlineUsers,
@@ -372,5 +410,8 @@ module.exports = {
     invalidateGiftsCatalogCache,
     syncBannersCache,
     getCachedBanners,
-    invalidateBannersCache
+    invalidateBannersCache,
+    syncCoupleBondCache,
+    getCachedCoupleBond,
+    invalidateCoupleBondCache
 };
