@@ -20,7 +20,6 @@ async function generateUnique6DigitId() {
 async function resolveTrueOwnerUid(inputUid) {
     const clean = String(inputUid || '').trim();
     if (!clean) return '';
-    // If inputUid is numeric, resolve to actual user's Firebase Auth UID if possible
     if (/^\d+$/.test(clean)) {
         const numericVal = Number(clean);
         const userDoc = await User.findOne({ numericId: numericVal }).lean();
@@ -35,25 +34,32 @@ async function resolveTrueOwnerUid(inputUid) {
     return clean;
 }
 
+async function cleanupDuplicateRooms() {
+    try {
+        const rooms = await Room.find({}).sort({ updatedAt: -1 }).lean();
+        const seenOwners = new Set();
+        for (const r of rooms) {
+            const owner = r.ownerUid || r.roomId;
+            if (!owner) continue;
+            const resolved = await resolveTrueOwnerUid(owner);
+            if (seenOwners.has(resolved) || seenOwners.has(owner)) {
+                await Room.deleteOne({ _id: r._id });
+            } else {
+                seenOwners.add(resolved);
+                seenOwners.add(owner);
+            }
+        }
+    } catch (e) {
+        console.error('Cleanup duplicate rooms error:', e);
+    }
+}
+
 const RoomService = {
     async getLiveRooms() {
+        await cleanupDuplicateRooms();
         const now = Date.now();
         if (localMemoryRoomsCache && (now - lastCacheTimestamp) < LOCAL_CACHE_TTL_MS) {
             return { source: 'memory_cache', rooms: localMemoryRoomsCache };
-        }
-
-        if (redisClient && redisClient.status === 'ready') {
-            try {
-                const cached = await redisClient.get('rooms:active:list');
-                if (cached) {
-                    const parsed = JSON.parse(cached);
-                    localMemoryRoomsCache = parsed;
-                    lastCacheTimestamp = now;
-                    return { source: 'redis_cache', rooms: parsed };
-                }
-            } catch (err) {
-                console.warn('Redis cache get error:', err.message);
-            }
         }
 
         const activeRooms = await Room.find({ isLive: true })
@@ -61,43 +67,46 @@ const RoomService = {
             .limit(50)
             .lean();
 
-        const formattedRooms = activeRooms.map(r => ({
-            id: r.displayRoomId || r.roomId || r._id,
-            publicRoomId: r.displayRoomId || r.roomId,
-            roomId: r.roomId || r.ownerUid,
-            title: r.roomName || 'Voice Room',
-            roomName: r.roomName || 'Voice Room',
-            category: r.category || 'Voice Party',
-            announcement: r.announcement || 'Welcome!',
-            ownerId: r.ownerUid || '',
-            ownerUid: r.ownerUid || '',
-            photoUri: r.roomPhotoUrl || '',
-            roomPhotoUrl: r.roomPhotoUrl || '',
-            backgroundUrl: r.backgroundUrl || '',
-            participantCount: r.onlineCount || 1,
-            speakerSlots: 16,
-            tags: r.category || '#Chill,#Talk,#Hindi',
-            roomHeat: r.heatScore || 10,
-            isLive: true
-        }));
+        const formattedRooms = [];
+        for (const r of activeRooms) {
+            let ownerNumericId = "";
+            let ownerLevel = 1;
+            const ownerUid = r.ownerUid || r.roomId;
+            if (ownerUid) {
+                const ownerUser = await User.findOne({ $or: [{ uid: ownerUid }, { roomId: ownerUid }] }).lean();
+                if (ownerUser) {
+                    if (ownerUser.numericId) ownerNumericId = String(ownerUser.numericId);
+                    if (ownerUser.level) ownerLevel = ownerUser.level;
+                }
+            }
+
+            formattedRooms.push({
+                id: r.displayRoomId || r.roomId || r._id,
+                publicRoomId: r.displayRoomId || r.roomId,
+                roomId: r.roomId || r.ownerUid,
+                title: r.roomName || 'Voice Room',
+                roomName: r.roomName || 'Voice Room',
+                category: r.category || 'Voice Party',
+                announcement: r.announcement || 'Welcome!',
+                ownerId: r.ownerUid || '',
+                ownerUid: r.ownerUid || '',
+                ownerNumericId: ownerNumericId || r.displayRoomId || '102030',
+                roomLevel: ownerLevel,
+                photoUri: r.roomPhotoUrl || '',
+                roomPhotoUrl: r.roomPhotoUrl || '',
+                backgroundUrl: r.backgroundUrl || '',
+                participantCount: r.onlineCount || 0,
+                onlineCount: r.onlineCount || 0,
+                speakerSlots: 16,
+                tags: r.category || '#Chill,#Talk,#Hindi',
+                roomHeat: r.heatScore || 10,
+                isLive: (r.onlineCount || 0) > 0 && !r.isBlocked
+            });
+        }
 
         localMemoryRoomsCache = formattedRooms;
         lastCacheTimestamp = now;
-
-        if (redisClient && redisClient.status === 'ready') {
-            try {
-                await redisClient.set('rooms:active:list', JSON.stringify(formattedRooms), 'EX', 10);
-            } catch (err) {
-                console.warn('Redis cache set failed:', err.message);
-            }
-        }
-
         return { source: 'mongodb', rooms: formattedRooms };
-    },
-
-    async getAllRoomsAdmin() {
-        const rooms = await Room.find({}).sort({ updatedAt: -1 }).limit(200).lean();
-        return rooms;
     },
 
     async getOwnerRoom(uid) {
@@ -117,6 +126,7 @@ const RoomService = {
     },
 
     async createOrUpdateRoom(data) {
+        await cleanupDuplicateRooms();
         const {
             ownerUid,
             roomName,
@@ -126,7 +136,8 @@ const RoomService = {
             category,
             announcement,
             isLocked,
-            pinCode
+            pinCode,
+            displayRoomId
         } = data || {};
 
         const rawUid = String(ownerUid || '').trim();
@@ -142,7 +153,7 @@ const RoomService = {
         const effectiveTitle = (roomName || 'Voice Party').trim();
         const effectiveCover = roomPhotoUrl || roomCover || "";
 
-        // Deduplication: Find all rooms matching this ownerUid or roomId
+        // Deduplication: Find all rooms matching this owner
         const duplicates = await Room.find({
             $or: [
                 { ownerUid: cleanUid },
@@ -155,7 +166,6 @@ const RoomService = {
         let room = null;
         if (duplicates && duplicates.length > 0) {
             room = duplicates[0];
-            // Remove any extra duplicates to ensure strictly 1 room per user
             for (let i = 1; i < duplicates.length; i++) {
                 try {
                     await Room.deleteOne({ _id: duplicates[i]._id });
@@ -166,26 +176,23 @@ const RoomService = {
         if (room) {
             room.roomId = cleanUid;
             room.ownerUid = cleanUid;
-            room.roomName = effectiveTitle;
+            if (roomName && String(roomName).trim().length > 0) {
+                room.roomName = effectiveTitle;
+            }
             if (effectiveCover) room.roomPhotoUrl = effectiveCover;
             if (backgroundUrl !== undefined) room.backgroundUrl = backgroundUrl;
             if (category) room.category = category;
             if (announcement !== undefined) room.announcement = announcement;
             if (isLocked !== undefined) room.isLocked = Boolean(isLocked);
             if (pinCode !== undefined) room.pinCode = pinCode;
+            if (displayRoomId !== undefined && String(displayRoomId).trim().length > 0) {
+                room.displayRoomId = String(displayRoomId).trim();
+            }
             room.isLive = true;
             room.updatedAt = new Date();
             await room.save();
         } else {
-            // Clean any stray numeric ownerUid documents
-            const numericStray = await Room.findOne({ ownerUid: rawUid }).lean();
-            if (numericStray) {
-                try {
-                    await Room.deleteOne({ _id: numericStray._id });
-                } catch (_) {}
-            }
-
-            const sixDigitId = await generateUnique6DigitId();
+            const sixDigitId = (displayRoomId && String(displayRoomId).trim().length > 0) ? String(displayRoomId).trim() : await generateUnique6DigitId();
             room = await Room.create({
                 roomId: cleanUid,
                 ownerUid: cleanUid,
@@ -198,17 +205,22 @@ const RoomService = {
                 isLocked: Boolean(isLocked),
                 pinCode: pinCode || "",
                 isLive: true,
+                onlineCount: 0,
                 heatScore: 10
             });
         }
 
-        localMemoryRoomsCache = null;
-        if (redisClient && redisClient.status === 'ready') {
+        // Sync displayRoomId directly onto the owner's User document for instant lookup
+        if (room && room.displayRoomId) {
             try {
-                await redisClient.del('rooms:active:list');
+                await User.updateOne(
+                    { uid: cleanUid },
+                    { $set: { roomId: String(room.displayRoomId).trim() } }
+                );
             } catch (_) {}
         }
 
+        localMemoryRoomsCache = null;
         return room.toObject();
     },
 
@@ -230,11 +242,6 @@ const RoomService = {
         );
 
         localMemoryRoomsCache = null;
-        if (redisClient && redisClient.status === 'ready') {
-            try {
-                await redisClient.del('rooms:active:list');
-            } catch (_) {}
-        }
         return true;
     },
 
