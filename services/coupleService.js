@@ -60,6 +60,7 @@ const coupleService = {
             // Determine partner info relative to this user
             const isUserA = doc.userAId === cleanUid;
             const partner = isUserA ? doc.userB : doc.userA;
+            const connectedMillis = new Date(doc.connectedAt).getTime();
             const formatted = {
                 bondId: doc.bondId,
                 myUid: cleanUid,
@@ -68,11 +69,18 @@ const coupleService = {
                 partnerAvatar: partner.avatar,
                 partnerDisplayId: partner.displayId,
                 partnerGender: partner.gender,
+                userAId: doc.userAId,
+                userAName: doc.userA ? doc.userA.name : '',
+                userAAvatar: doc.userA ? doc.userA.avatar : '',
+                userBId: doc.userBId,
+                userBName: doc.userB ? doc.userB.name : '',
+                userBAvatar: doc.userB ? doc.userB.avatar : '',
                 totalXp: doc.totalXp,
                 level: doc.level,
                 affectionScore: doc.affectionScore,
                 connectedAt: doc.connectedAt,
-                daysTogether: Math.max(1, Math.floor((Date.now() - new Date(doc.connectedAt).getTime()) / (24 * 60 * 60 * 1000))),
+                connectedAtMillis: connectedMillis,
+                daysTogether: Math.max(1, Math.floor((Date.now() - connectedMillis) / (24 * 60 * 60 * 1000))),
                 status: doc.status
             };
 
