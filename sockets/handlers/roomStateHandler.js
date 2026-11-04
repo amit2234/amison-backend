@@ -18,13 +18,17 @@ const roomStateHandler = {
         // Register client to room channel for O(1) targeted broadcasts
         roomChannelManager.joinRoomChannel(roomId, userId, ws);
 
+        const currentSeats = cacheService.getOrCreateRoomSeats(roomId);
+        const existingSeatIndex = currentSeats.findIndex(s => s && String(s.userId || '').trim() === userId);
+        const isOnSeat = existingSeatIndex >= 0;
+
         const roomParticipants = cacheService.getRoomParticipants(roomId);
         roomParticipants.set(userId, {
             userId,
             name: userName,
             avatar: userAvatar,
-            onSeat: isOwner,
-            seatIndex: isOwner ? 0 : -1
+            onSeat: isOnSeat,
+            seatIndex: isOnSeat ? existingSeatIndex : -1
         });
 
         const heatScore = cacheService.calculateRoomHeat(roomParticipants);
@@ -37,7 +41,6 @@ const roomStateHandler = {
         ).catch(err => console.error('[RoomStateHandler] Mongo join update error:', err.message));
 
         // 1. Send full 16-seat stage snapshot to joining user
-        const currentSeats = cacheService.getOrCreateRoomSeats(roomId);
         ws.send(JSON.stringify({
             type: 'seats:batch',
             roomId,
@@ -66,6 +69,30 @@ const roomStateHandler = {
         if (!roomId || !userId) return;
 
         roomChannelManager.leaveRoomChannel(roomId, ws);
+
+        // Automatically clear any seat occupied by the leaving/disconnecting user
+        const seats = cacheService.getOrCreateRoomSeats(roomId);
+        seats.forEach((seat, idx) => {
+            if (seat.userId === userId) {
+                seat.userId = null;
+                seat.userName = null;
+                seat.userAvatar = null;
+                roomChannelManager.broadcastToRoom(roomId, {
+                    type: 'seat:update',
+                    roomId,
+                    seatIndex: idx,
+                    userId: '',
+                    userName: '',
+                    userAvatar: '',
+                    isLocked: seat.isLocked,
+                    isMuted: seat.isMuted
+                });
+                Room.updateOne(
+                    { $or: [{ roomId }, { ownerUid: roomId }, { displayRoomId: roomId }] },
+                    { $set: { [`seats.${idx}`]: seat, updatedAt: new Date() } }
+                ).catch(() => {});
+            }
+        });
 
         const roomParticipants = cacheService.getRoomParticipants(roomId);
         roomParticipants.delete(userId);
