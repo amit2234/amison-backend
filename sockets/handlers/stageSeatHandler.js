@@ -8,7 +8,24 @@ const roomChannelManager = require('../managers/roomChannelManager');
 const stageSeatHandler = {
     async handleSeatUpdate(data, ws, wss, broadcastPopularRooms) {
         const meta = roomChannelManager.getMetadata(ws);
-        const roomId = String(data.roomId || meta?.roomId || '').trim();
+        const rawRoomId = String(data.roomId || meta?.roomId || '').trim();
+        let roomId = meta?.canonicalRoomId || roomChannelManager.getCanonicalId(rawRoomId) || rawRoomId;
+
+        if (!roomId || roomId === rawRoomId) {
+            try {
+                const roomDoc = await Room.findOne({
+                    $or: [{ displayRoomId: rawRoomId }, { ownerUid: rawRoomId }, { roomId: rawRoomId }]
+                }).lean();
+                if (roomDoc) {
+                    roomId = roomDoc.ownerUid || roomDoc.displayRoomId || rawRoomId;
+                    if (roomDoc.displayRoomId && roomDoc.ownerUid) {
+                        roomChannelManager.registerAlias(roomDoc.displayRoomId, roomDoc.ownerUid);
+                    }
+                }
+            } catch (_) {}
+        }
+        if (!roomId) roomId = rawRoomId;
+
         const targetUserId = String(data.userId || meta?.userId || '').trim();
         const onSeat = data.onSeat !== undefined ? Boolean(data.onSeat) : (targetUserId.length > 0);
         const seatIndex = data.seatIndex !== undefined ? Number(data.seatIndex) : -1;
@@ -33,21 +50,26 @@ const stageSeatHandler = {
                 }
             }
 
-            // O(1) Targeted Seat update broadcast to room viewers
-            roomChannelManager.broadcastToRoom(roomId, {
+            // O(1) Targeted Seat update broadcast to room viewers across canonical & alias IDs
+            const seatPacket = {
                 type: 'seat:update',
                 roomId,
+                rawRoomId,
                 seatIndex,
                 userId: seat.userId || '',
                 userName: seat.userName || '',
                 userAvatar: seat.userAvatar || '',
                 isLocked: seat.isLocked,
                 isMuted: seat.isMuted
-            });
+            };
+            roomChannelManager.broadcastToRoom(roomId, seatPacket);
+            if (rawRoomId && rawRoomId !== roomId) {
+                roomChannelManager.broadcastToRoom(rawRoomId, seatPacket);
+            }
 
             // Async MongoDB persistence
             Room.updateOne(
-                { $or: [{ roomId }, { ownerUid: roomId }, { displayRoomId: roomId }] },
+                { $or: [{ roomId }, { ownerUid: roomId }, { displayRoomId: roomId }, { displayRoomId: rawRoomId }] },
                 { $set: { [`seats.${seatIndex}`]: seat, updatedAt: new Date() } }
             ).catch(err => console.error('[StageSeatHandler] Mongo seat update error:', err.message));
         }
