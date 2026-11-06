@@ -37,8 +37,8 @@ class NewopZegoService {
         // Seed initial default document if not present in MongoDB
         doc = await ZegoConfig.create({
           configKey: 'global_zego',
-          rtcAppId: 638484,
-          rtcAppSign: 'be235c9670fdcd2cff8d18641bcc92b3dffe49448bf87bfc833a',
+          rtcAppId: 68650867,
+          rtcAppSign: '19d1857087146ff936a5b7b1d41d37154a4d0121361ea11357f9cdd80fe11718',
           isVoiceEnabled: true,
           updatedAt: new Date()
         });
@@ -46,8 +46,8 @@ class NewopZegoService {
       }
 
       ramZegoCache = {
-        rtcAppId: Number(doc.rtcAppId || 0),
-        rtcAppSign: String(doc.rtcAppSign || ''),
+        rtcAppId: Number(doc.rtcAppId || 68650867),
+        rtcAppSign: String(doc.rtcAppSign || '19d1857087146ff936a5b7b1d41d37154a4d0121361ea11357f9cdd80fe11718'),
         chatAppId: Number(doc.chatAppId || 0),
         chatAppSign: String(doc.chatAppSign || ''),
         isVoiceEnabled: doc.isVoiceEnabled !== false
@@ -57,8 +57,8 @@ class NewopZegoService {
     } catch (error) {
       console.error('Error fetching ZEGO config from MongoDB Atlas:', error);
       return ramZegoCache || {
-        rtcAppId: 638484,
-        rtcAppSign: 'be235c9670fdcd2cff8d18641bcc92b3dffe49448bf87bfc833a',
+        rtcAppId: 68650867,
+        rtcAppSign: '19d1857087146ff936a5b7b1d41d37154a4d0121361ea11357f9cdd80fe11718',
         chatAppId: 0,
         chatAppSign: '',
         isVoiceEnabled: true
