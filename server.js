@@ -40,6 +40,10 @@ const usersRoutes = require('./routes/users');
 app.use('/api/users', usersRoutes);
 app.use('/api/user', usersRoutes);
 
+// 1.5. Reels & Moments REST API (/api/reels)
+const reelsRoutes = require('./routes/reels');
+app.use('/api/reels', reelsRoutes);
+
 // 2. Rooms REST API (/api/rooms)
 const roomsRoutes = require('./routes/rooms');
 app.use('/api/rooms', roomsRoutes);
