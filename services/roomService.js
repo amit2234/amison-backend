@@ -80,6 +80,8 @@ const RoomService = {
                 }
             }
 
+            const liveCount = Math.max(1, r.onlineCount || 1);
+            const heat = r.heatScore > 0 ? r.heatScore : Math.max(10, liveCount * 10);
             formattedRooms.push({
                 id: r.displayRoomId || r.roomId || r._id,
                 publicRoomId: r.displayRoomId || r.roomId,
@@ -95,12 +97,12 @@ const RoomService = {
                 photoUri: r.roomPhotoUrl || '',
                 roomPhotoUrl: r.roomPhotoUrl || '',
                 backgroundUrl: r.backgroundUrl || '',
-                participantCount: r.onlineCount || 0,
-                onlineCount: r.onlineCount || 0,
+                participantCount: liveCount,
+                onlineCount: liveCount,
                 speakerSlots: 16,
                 tags: r.category || '#Chill,#Talk,#Hindi',
-                roomHeat: r.heatScore || 10,
-                isLive: (r.onlineCount || 0) > 0 && !r.isBlocked
+                roomHeat: heat,
+                isLive: !r.isBlocked
             });
         }
 
@@ -189,6 +191,8 @@ const RoomService = {
                 room.displayRoomId = String(displayRoomId).trim();
             }
             room.isLive = true;
+            room.onlineCount = Math.max(1, room.onlineCount || 1);
+            room.heatScore = Math.max(10, room.heatScore || 10);
             room.updatedAt = new Date();
             await room.save();
         } else {
@@ -205,7 +209,7 @@ const RoomService = {
                 isLocked: Boolean(isLocked),
                 pinCode: pinCode || "",
                 isLive: true,
-                onlineCount: 0,
+                onlineCount: 1,
                 heatScore: 10
             });
         }
