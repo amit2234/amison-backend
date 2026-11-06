@@ -54,27 +54,36 @@ router.get('/feed', async (req, res) => {
       .limit(limit)
       .lean();
 
+    // 🔄 Live Sync with Users Collection via Permanent Auth UID
+    // Guarantees that if a user changes numericId, name, or avatar, all reels dynamically show current user data
+    const userUids = [...new Set(reels.map(item => item.userUid))];
+    const userDocs = await User.find({ uid: { $in: userUids } }).lean();
+    const userMap = new Map(userDocs.map(u => [u.uid, u]));
+
     return res.json({
       success: true,
       page,
-      reels: reels.map(item => ({
-        reelId: item.reelId,
-        userUid: item.userUid,
-        numericId: item.numericId,
-        userName: item.userName,
-        userAvatar: item.userAvatar,
-        userLevel: item.userLevel,
-        gender: item.gender,
-        videoHlsUrl: item.videoHlsUrl,
-        coverUrl: item.coverUrl,
-        mediaType: item.mediaType,
-        caption: item.caption,
-        hashtags: item.hashtags,
-        fullDescription: item.fullDescription,
-        likesCount: item.likesCount,
-        commentsCount: item.commentsCount,
-        createdAt: item.createdAt
-      }))
+      reels: reels.map(item => {
+        const u = userMap.get(item.userUid);
+        return {
+          reelId: item.reelId,
+          userUid: item.userUid,
+          numericId: (u && u.numericId) ? u.numericId : item.numericId,
+          userName: (u && u.name) ? u.name : item.userName,
+          userAvatar: (u && u.avatarUrl) ? u.avatarUrl : item.userAvatar,
+          userLevel: (u && u.level) ? u.level : item.userLevel,
+          gender: (u && u.gender) ? u.gender : item.gender,
+          videoHlsUrl: item.videoHlsUrl,
+          coverUrl: item.coverUrl,
+          mediaType: item.mediaType,
+          caption: item.caption,
+          hashtags: item.hashtags,
+          fullDescription: item.fullDescription,
+          likesCount: item.likesCount,
+          commentsCount: item.commentsCount,
+          createdAt: item.createdAt
+        };
+      })
     });
   } catch (err) {
     console.error("GET /feed error:", err);
@@ -90,6 +99,9 @@ router.get('/user/:userUid', async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    // 🔄 Live Sync with Users Collection for profile owner
+    const userDoc = await User.findOne({ uid: userUid }).lean();
+
     return res.json({
       success: true,
       userUid,
@@ -97,11 +109,11 @@ router.get('/user/:userUid', async (req, res) => {
       reels: reels.map(item => ({
         reelId: item.reelId,
         userUid: item.userUid,
-        numericId: item.numericId,
-        userName: item.userName,
-        userAvatar: item.userAvatar,
-        userLevel: item.userLevel,
-        gender: item.gender,
+        numericId: (userDoc && userDoc.numericId) ? userDoc.numericId : item.numericId,
+        userName: (userDoc && userDoc.name) ? userDoc.name : item.userName,
+        userAvatar: (userDoc && userDoc.avatarUrl) ? userDoc.avatarUrl : item.userAvatar,
+        userLevel: (userDoc && userDoc.level) ? userDoc.level : item.userLevel,
+        gender: (userDoc && userDoc.gender) ? userDoc.gender : item.gender,
         videoHlsUrl: item.videoHlsUrl,
         coverUrl: item.coverUrl,
         mediaType: item.mediaType,
@@ -144,9 +156,9 @@ router.post('/publish', async (req, res) => {
 
     // Lookup user in existing Users collection to keep stats aligned
     const userDoc = await User.findOne({ $or: [{ uid: userUid }, { numericId: parseInt(numericId) || 0 }] });
-    const finalUserName = userName || (userDoc ? userDoc.name : 'Amit');
-    const finalAvatar = userAvatar || (userDoc ? userDoc.avatarUrl : '');
-    const finalNumericId = numericId || (userDoc ? userDoc.numericId : 102030);
+    const finalUserName = (userDoc && userDoc.name) ? userDoc.name : (userName || 'Amit');
+    const finalAvatar = (userDoc && userDoc.avatarUrl) ? userDoc.avatarUrl : (userAvatar || '');
+    const finalNumericId = (userDoc && userDoc.numericId) ? userDoc.numericId : (numericId || 102030);
 
     const finalReelId = reelId || `post_${Date.now()}`;
     const fullDesc = description || `@${finalUserName} ${caption || ''} ${hashtags || ''}`.trim();
@@ -225,9 +237,9 @@ router.post('/comment', async (req, res) => {
     }
 
     const userDoc = await User.findOne({ uid: userUid });
-    const finalUserName = userName || (userDoc ? userDoc.name : 'User');
-    const finalAvatar = userAvatar || (userDoc ? userDoc.avatarUrl : '');
-    const finalNumericId = numericId || (userDoc ? userDoc.numericId : 0);
+    const finalUserName = (userDoc && userDoc.name) ? userDoc.name : (userName || 'User');
+    const finalAvatar = (userDoc && userDoc.avatarUrl) ? userDoc.avatarUrl : (userAvatar || '');
+    const finalNumericId = (userDoc && userDoc.numericId) ? userDoc.numericId : (numericId || 0);
 
     const commentId = `comment_${Date.now()}_${Math.floor(Math.random()*1000)}`;
 
@@ -267,19 +279,27 @@ router.get('/comments/:reelId', async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
+    // Live Sync comment authors with Users collection
+    const commentUserUids = [...new Set(comments.map(c => c.userUid))];
+    const commentUserDocs = await User.find({ uid: { $in: commentUserUids } }).lean();
+    const commentUserMap = new Map(commentUserDocs.map(u => [u.uid, u]));
+
     return res.json({
       success: true,
       reelId,
-      comments: comments.map(c => ({
-        commentId: c.commentId,
-        reelId: c.reelId,
-        userUid: c.userUid,
-        numericId: c.numericId,
-        userName: c.userName,
-        userAvatar: c.userAvatar,
-        commentText: c.commentText,
-        createdAt: c.createdAt
-      }))
+      comments: comments.map(c => {
+        const u = commentUserMap.get(c.userUid);
+        return {
+          commentId: c.commentId,
+          reelId: c.reelId,
+          userUid: c.userUid,
+          numericId: (u && u.numericId) ? u.numericId : c.numericId,
+          userName: (u && u.name) ? u.name : c.userName,
+          userAvatar: (u && u.avatarUrl) ? u.avatarUrl : c.userAvatar,
+          commentText: c.commentText,
+          createdAt: c.createdAt
+        };
+      })
     });
   } catch (err) {
     console.error("GET /comments/:reelId error:", err);
@@ -288,3 +308,4 @@ router.get('/comments/:reelId', async (req, res) => {
 });
 
 module.exports = router;
+
