@@ -3,6 +3,7 @@ const router = express.Router();
 const cloudinary = require('cloudinary').v2;
 const Reel = require('../models/Reel');
 const ReelLike = require('../models/ReelLike');
+const ReelComment = require('../models/ReelComment');
 const User = require('../models/User');
 
 // Configure Cloudinary from env variables
@@ -81,7 +82,44 @@ router.get('/feed', async (req, res) => {
   }
 });
 
-// 3. PUBLISH NEW REEL POST (/api/reels/publish)
+// 3. GET USER REELS & PHOTOS (/api/reels/user/:userUid)
+router.get('/user/:userUid', async (req, res) => {
+  try {
+    const { userUid } = req.params;
+    const reels = await Reel.find({ userUid, isPublished: true })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      userUid,
+      count: reels.length,
+      reels: reels.map(item => ({
+        reelId: item.reelId,
+        userUid: item.userUid,
+        numericId: item.numericId,
+        userName: item.userName,
+        userAvatar: item.userAvatar,
+        userLevel: item.userLevel,
+        gender: item.gender,
+        videoHlsUrl: item.videoHlsUrl,
+        coverUrl: item.coverUrl,
+        mediaType: item.mediaType,
+        caption: item.caption,
+        hashtags: item.hashtags,
+        fullDescription: item.fullDescription,
+        likesCount: item.likesCount,
+        commentsCount: item.commentsCount,
+        createdAt: item.createdAt
+      }))
+    });
+  } catch (err) {
+    console.error("GET /user/:userUid error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 4. PUBLISH NEW REEL POST (/api/reels/publish)
 router.post('/publish', async (req, res) => {
   try {
     const {
@@ -137,7 +175,7 @@ router.post('/publish', async (req, res) => {
   }
 });
 
-// 4. TOGGLE LIKE REEL (/api/reels/like)
+// 5. TOGGLE LIKE REEL (/api/reels/like)
 router.post('/like', async (req, res) => {
   try {
     const { reelId, userUid } = req.body;
@@ -173,6 +211,78 @@ router.post('/like', async (req, res) => {
     return res.json({ success: true, reelId, likesCount: newLikesCount, isLiked });
   } catch (err) {
     console.error("POST /like error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 6. POST A COMMENT (/api/reels/comment)
+router.post('/comment', async (req, res) => {
+  try {
+    const { reelId, userUid, commentText, userName, userAvatar, numericId } = req.body;
+
+    if (!reelId || !userUid || !commentText) {
+      return res.status(400).json({ success: false, error: 'Missing reelId, userUid, or commentText' });
+    }
+
+    const userDoc = await User.findOne({ uid: userUid });
+    const finalUserName = userName || (userDoc ? userDoc.name : 'User');
+    const finalAvatar = userAvatar || (userDoc ? userDoc.avatarUrl : '');
+    const finalNumericId = numericId || (userDoc ? userDoc.numericId : 0);
+
+    const commentId = `comment_${Date.now()}_${Math.floor(Math.random()*1000)}`;
+
+    const newComment = await ReelComment.create({
+      commentId,
+      reelId,
+      userUid,
+      numericId: finalNumericId,
+      userName: finalUserName,
+      userAvatar: finalAvatar,
+      commentText
+    });
+
+    // Increment comment count on Reel
+    const updatedReel = await Reel.findOneAndUpdate(
+      { reelId },
+      { $inc: { commentsCount: 1 } },
+      { new: true }
+    );
+
+    return res.json({
+      success: true,
+      comment: newComment,
+      commentsCount: updatedReel ? updatedReel.commentsCount : 1
+    });
+  } catch (err) {
+    console.error("POST /comment error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// 7. GET COMMENTS FOR A REEL (/api/reels/comments/:reelId)
+router.get('/comments/:reelId', async (req, res) => {
+  try {
+    const { reelId } = req.params;
+    const comments = await ReelComment.find({ reelId })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.json({
+      success: true,
+      reelId,
+      comments: comments.map(c => ({
+        commentId: c.commentId,
+        reelId: c.reelId,
+        userUid: c.userUid,
+        numericId: c.numericId,
+        userName: c.userName,
+        userAvatar: c.userAvatar,
+        commentText: c.commentText,
+        createdAt: c.createdAt
+      }))
+    });
+  } catch (err) {
+    console.error("GET /comments/:reelId error:", err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
