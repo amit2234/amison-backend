@@ -115,9 +115,9 @@ const coupleService = {
             throw new Error('Target user already has an active Couple Partner.');
         }
 
-        // 3. Fetch user profiles from MongoDB
-        const senderDoc = await User.findOne({ userId: cleanSender }).lean() || {};
-        const receiverDoc = await User.findOne({ userId: cleanReceiver }).lean() || {};
+        // 3. Fetch user profiles from MongoDB using UID primary key
+        const senderDoc = await User.findOne({ $or: [{ uid: cleanSender }, { numericId: Number(cleanSender) || 0 }] }).lean() || {};
+        const receiverDoc = await User.findOne({ $or: [{ uid: cleanReceiver }, { numericId: Number(cleanReceiver) || 0 }] }).lean() || {};
 
         const senderGender = String(senderDoc.gender || 'Male').toLowerCase();
         const receiverGender = String(receiverDoc.gender || 'Female').toLowerCase();
