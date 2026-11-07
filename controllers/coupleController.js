@@ -87,7 +87,7 @@ const coupleController = {
             if (!uid) {
                 return res.status(400).json({ success: false, error: 'User ID is required' });
             }
-
+            const invites = await CoupleInvitation.find({ receiverId: uid, status: 'PENDING' }).lean();
             const formatted = invites.map(inv => ({
                 invitationId: inv.invitationId,
                 senderId: inv.senderId,
