@@ -36,9 +36,11 @@ const roomStateHandler = {
         let userLevel = data.level ? Number(data.level) : 1;
         let userGender = data.gender || 'Male';
 
+        let canonicalUserId = userId;
         try {
             const userDoc = await User.findOne({ $or: [{ uid: userId }, { numericId: parseInt(userId) || 0 }] }).lean();
-            if (userDoc) {
+            if (userDoc && userDoc.uid) {
+                canonicalUserId = userDoc.uid;
                 if (!userName || userName === 'User') userName = userDoc.name || 'User';
                 if (!userAvatar) userAvatar = userDoc.avatarUrl || '';
                 if (!userNumericId) userNumericId = String(userDoc.numericId || '');
@@ -47,7 +49,7 @@ const roomStateHandler = {
             }
         } catch (_) {}
 
-        if (roomDoc && (roomDoc.ownerUid === userId || roomDoc.roomId === userId) && (!userName || userName === 'User')) {
+        if (roomDoc && (roomDoc.ownerUid === canonicalUserId || roomDoc.roomId === canonicalUserId || roomDoc.ownerUid === userId) && (!userName || userName === 'User')) {
             userName = roomDoc.ownerName || userName;
             if (!userAvatar) userAvatar = roomDoc.roomCover || '';
         }
@@ -55,12 +57,12 @@ const roomStateHandler = {
         if (!userName) userName = 'User';
 
         const currentSeats = cacheService.getOrCreateRoomSeats(canonicalRoomId);
-        const existingSeatIndex = currentSeats.findIndex(s => s && String(s.userId || '').trim() === userId);
+        const existingSeatIndex = currentSeats.findIndex(s => s && (String(s.userId || '').trim() === canonicalUserId || String(s.userId || '').trim() === userId));
         const isOnSeat = existingSeatIndex >= 0;
 
         const roomParticipants = cacheService.getRoomParticipants(canonicalRoomId);
-        roomParticipants.set(userId, {
-            userId,
+        roomParticipants.set(canonicalUserId, {
+            userId: canonicalUserId,
             name: userName,
             avatar: userAvatar,
             numericId: userNumericId,
@@ -146,6 +148,12 @@ const roomStateHandler = {
 
         const roomParticipants = cacheService.getRoomParticipants(canonicalRoomId);
         roomParticipants.delete(userId);
+        try {
+            const userDoc = await User.findOne({ $or: [{ uid: userId }, { numericId: parseInt(userId) || 0 }] }).lean();
+            if (userDoc && userDoc.uid) {
+                roomParticipants.delete(userDoc.uid);
+            }
+        } catch (_) {}
 
         const onlineCount = roomParticipants.size;
         const heatScore = onlineCount > 0 ? Math.max(10, onlineCount * 10) : 0;
