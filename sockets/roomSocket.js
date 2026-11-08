@@ -41,7 +41,7 @@ async function broadcastPopularRooms(wss) {
  * Path: '/ws/rooms'
  */
 function setupRoomSocket(server) {
-    const wss = new WebSocket.Server({ server, path: '/ws/rooms' });
+    const wss = new WebSocket.Server({ noServer: true });
     globalRoomWss = wss;
     console.log('🎙️ [RoomSocket] High-Performance Channel-Based WebSocket Server running on /ws/rooms');
 
@@ -50,6 +50,10 @@ function setupRoomSocket(server) {
             const urlObj = new URL(req.url, 'http://localhost');
             const userId = (urlObj.searchParams.get('userId') || req.headers['x-user-id'] || '').trim();
             const roomId = (urlObj.searchParams.get('roomId') || req.headers['x-room-id'] || '').trim();
+            const displayRoomId = (urlObj.searchParams.get('displayRoomId') || req.headers['x-display-room-id'] || '').trim();
+            if (displayRoomId && roomId) {
+                roomChannelManager.registerAlias(displayRoomId, roomId);
+            }
             if (roomId && userId) {
                 roomChannelManager.joinRoomChannel(roomId, userId, ws);
             }
@@ -86,6 +90,11 @@ function setupRoomSocket(server) {
                         roomChatHandler.handleRoomChat(data, ws);
                         break;
 
+                    case 'room:typing':
+                    case 'typing':
+                        roomChatHandler.handleRoomTyping(data, ws);
+                        break;
+
                     case 'gift:send':
                     case 'room:gift_send':
                     case 'send_gift':
@@ -96,6 +105,16 @@ function setupRoomSocket(server) {
                     case 'room:send_emoji':
                     case 'seat_emoji':
                         await stageSeatHandler.handleSendSeatEmoji(data, ws);
+                        break;
+
+                    case 'room:kick':
+                    case 'kick_user':
+                        try {
+                            const RoomService = require('../services/roomService');
+                            await RoomService.kickUser(data.roomId, data.targetUserId, data.durationHours || 3, data.hostName || 'Host');
+                        } catch (kErr) {
+                            console.error('[RoomSocket] Kick error:', kErr.message);
+                        }
                         break;
 
                     case 'ping':
@@ -126,6 +145,7 @@ function setupRoomSocket(server) {
             console.warn('[RoomSocket] Socket error:', err.message);
         });
     });
+    return wss;
 }
 
 /**
