@@ -73,12 +73,14 @@ const roomStateHandler = {
         });
 
         const onlineCount = roomParticipants.size;
-        const heatScore = Math.max(10, onlineCount * 10);
+        const stageMics = currentSeats.filter(s => s && s.userId).length;
+        const heatScore = (onlineCount * 10) + (stageMics * 25);
+        const isLive = onlineCount > 0 && heatScore >= 10;
 
-        // 3. Update MongoDB: Set isLive: true, heatScore, and onlineCount
+        // 3. Update MongoDB: Set isLive, heatScore, and onlineCount
         Room.updateOne(
             { $or: [{ roomId: canonicalRoomId }, { ownerUid: canonicalRoomId }, { displayRoomId: canonicalRoomId }, { displayRoomId: roomId }, { ownerUid: roomId }] },
-            { $set: { isLive: true, heatScore, onlineCount, updatedAt: new Date() } }
+            { $set: { isLive, heatScore, onlineCount, updatedAt: new Date() } }
         ).catch(err => console.error('[RoomStateHandler] Mongo join update error:', err.message));
 
         // 4. Send full 16-seat stage snapshot to joining user
@@ -156,8 +158,10 @@ const roomStateHandler = {
         } catch (_) {}
 
         const onlineCount = roomParticipants.size;
-        const heatScore = onlineCount > 0 ? Math.max(10, onlineCount * 10) : 0;
-        const isLive = onlineCount > 0;
+        const remainingSeats = cacheService.getOrCreateRoomSeats(canonicalRoomId);
+        const stageMics = remainingSeats.filter(s => s && s.userId).length;
+        const heatScore = onlineCount > 0 ? ((onlineCount * 10) + (stageMics * 25)) : 0;
+        const isLive = onlineCount > 0 && heatScore >= 10;
 
         Room.updateOne(
             { $or: [{ roomId: canonicalRoomId }, { ownerUid: canonicalRoomId }, { displayRoomId: canonicalRoomId }] },
