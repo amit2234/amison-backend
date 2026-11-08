@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
+const Room = require('../models/Room');
+const RoomService = require('../services/roomService');
 const firebase = require('../firebase');
 
 // ============================================================================
@@ -100,7 +102,7 @@ router.get('/users/search', handleSearchUsers);
 // 3. POST /google-login - Authoritative 100% Backend Google Sign-In & Verification
 async function handleGoogleLogin(req, res) {
     try {
-        const { idToken, email: clientEmail, name, avatarUrl, dob, gender, country } = req.body;
+        const { idToken, email: clientEmail, name, avatarUrl, dob, gender, country, firebaseUid } = req.body;
         if (!idToken) {
             return res.status(400).json({ success: false, error: 'idToken is required' });
         }
@@ -109,6 +111,7 @@ async function handleGoogleLogin(req, res) {
         let verifiedEmail = null;
         let tokenName = '';
         let tokenPicture = '';
+        let googleSubUid = null;
 
         // 1. Authoritative Firebase Admin Token Verification
         if (firebase.isFirebaseInitialized() && firebase.admin) {
@@ -123,22 +126,35 @@ async function handleGoogleLogin(req, res) {
                 try {
                     const jwt = require('jsonwebtoken');
                     const decoded = jwt.decode(idToken);
-                    if (decoded && (decoded.user_id || decoded.sub)) {
-                        verifiedUid = decoded.user_id || decoded.sub;
-                        verifiedEmail = decoded.email || clientEmail || '';
-                        tokenName = decoded.name || '';
-                        tokenPicture = decoded.picture || '';
+                    if (decoded && decoded.sub) {
+                        googleSubUid = String(decoded.sub).trim();
+                    }
+                    // Priority 1: Authentic Firebase Auth UID explicitly sent by Android FirebaseAuth
+                    if (firebaseUid && String(firebaseUid).trim().length > 5) {
+                        verifiedUid = String(firebaseUid).trim();
+                    } else if (decoded && decoded.user_id) {
+                        verifiedUid = decoded.user_id;
+                    } else if (decoded && decoded.sub) {
+                        verifiedUid = decoded.sub;
                     } else {
                         return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
                     }
+                    verifiedEmail = decoded?.email || clientEmail || '';
+                    tokenName = decoded?.name || '';
+                    tokenPicture = decoded?.picture || '';
                 } catch (jwtErr) {
                     return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
                 }
             }
         } else {
-            console.warn('[Users Route] Firebase Admin not initialized, treating idToken as UID');
-            verifiedUid = String(idToken).trim();
+            console.warn('[Users Route] Firebase Admin not initialized, treating idToken/firebaseUid as UID');
+            verifiedUid = (firebaseUid && String(firebaseUid).trim().length > 5) ? String(firebaseUid).trim() : String(idToken).trim();
             verifiedEmail = (clientEmail || '').trim().toLowerCase();
+        }
+
+        // If client explicitly passed authentic Firebase Auth UID and verifiedUid was numeric Google sub, override with Firebase Auth UID
+        if (firebaseUid && String(firebaseUid).trim().length > 5 && (/^\d+$/.test(verifiedUid) || verifiedUid === googleSubUid)) {
+            verifiedUid = String(firebaseUid).trim();
         }
 
         if (!verifiedUid) {
@@ -148,19 +164,53 @@ async function handleGoogleLogin(req, res) {
         const cleanUid = String(verifiedUid).trim();
         const cleanEmail = (verifiedEmail || clientEmail || '').trim().toLowerCase();
 
-        // 2. Authoritative MongoDB Check: Search by permanent UID or Email
-        let existingUser = await User.findOne({
-            $or: [
-                { uid: cleanUid },
-                ...(cleanEmail ? [{ email: cleanEmail }] : [])
-            ]
-        });
+        // 2. Authoritative MongoDB Check: Search by permanent Firebase Auth UID, Email, OR legacy Google sub ID
+        const searchConditions = [
+            { uid: cleanUid },
+            ...(cleanEmail ? [{ email: cleanEmail }] : [])
+        ];
+        if (googleSubUid && googleSubUid !== cleanUid) {
+            searchConditions.push({ uid: googleSubUid });
+        }
+
+        let existingUser = await User.findOne({ $or: searchConditions });
 
         if (existingUser) {
-            // If user logged in and UID changed (e.g. upgraded project), update UID in MongoDB
+            // Auto-migrate legacy Google sub UID (or older UID) to permanent Firebase Auth UID
             if (existingUser.uid !== cleanUid) {
+                const oldUid = existingUser.uid;
+                console.log(`🔄 [Users Route] Auto-migrating MongoDB user uid from ${oldUid} to permanent Firebase Auth UID: ${cleanUid}`);
                 existingUser.uid = cleanUid;
+                if (cleanEmail && (!existingUser.email || existingUser.email !== cleanEmail)) {
+                    existingUser.email = cleanEmail;
+                }
                 await existingUser.save();
+
+                // Also update any room owned by this user to match the permanent Firebase Auth UID
+                try {
+                    await Room.updateMany({ ownerUid: oldUid }, { $set: { ownerUid: cleanUid, roomId: cleanUid } });
+                } catch (mErr) {
+                    console.warn('[Users Route] Room ownerUid migration notice:', mErr.message);
+                }
+            }
+
+            // Auto-check and ensure permanent Room exists in MongoDB Atlas rooms collection
+            try {
+                let userRoom = await RoomService.getOwnerRoom(cleanUid);
+                if (!userRoom) {
+                    userRoom = await RoomService.createOrUpdateRoom({
+                        ownerUid: cleanUid,
+                        roomName: `${existingUser.name || 'User'}'s Party Room`,
+                        roomPhotoUrl: existingUser.avatarUrl || '',
+                        category: 'Voice Party'
+                    });
+                }
+                if (userRoom && userRoom.displayRoomId && existingUser.roomId !== userRoom.displayRoomId) {
+                    existingUser.roomId = String(userRoom.displayRoomId).trim();
+                    await existingUser.save();
+                }
+            } catch (rErr) {
+                console.warn('[Users Route] Existing user room check notice:', rErr.message);
             }
 
             console.log(`✅ [Users Route] Authenticated existing MongoDB user: ${existingUser.name} (${cleanEmail || cleanUid})`);
@@ -201,6 +251,23 @@ async function handleGoogleLogin(req, res) {
 
             await newUser.save();
             console.log(`🆕 [Users Route] Created new user: ${newUser.name} (${newUser.uid})`);
+
+            // Auto-provision permanent voice room in rooms collection
+            try {
+                const permanentRoom = await RoomService.createOrUpdateRoom({
+                    ownerUid: cleanUid,
+                    roomName: `${newUser.name}'s Party Room`,
+                    roomPhotoUrl: newUser.avatarUrl || '',
+                    category: 'Voice Party'
+                });
+                if (permanentRoom && permanentRoom.displayRoomId) {
+                    newUser.roomId = String(permanentRoom.displayRoomId).trim();
+                    await newUser.save();
+                }
+            } catch (roomErr) {
+                console.warn('[Users Route] Room auto-provisioning notice:', roomErr.message);
+            }
+
             return res.status(201).json({
                 success: true,
                 isNewUser: false,
@@ -282,6 +349,23 @@ async function handleCreateUser(req, res) {
 
         await newUser.save();
         console.log(`[Users Route] Created user: ${newUser.name} (UID: ${newUser.uid}, NumericId: ${newUser.numericId})`);
+
+        // Auto-provision permanent voice room in rooms collection
+        try {
+            const permanentRoom = await RoomService.createOrUpdateRoom({
+                ownerUid: cleanUid,
+                roomName: `${newUser.name}'s Party Room`,
+                roomPhotoUrl: newUser.avatarUrl || '',
+                category: 'Voice Party'
+            });
+            if (permanentRoom && permanentRoom.displayRoomId) {
+                newUser.roomId = String(permanentRoom.displayRoomId).trim();
+                await newUser.save();
+            }
+        } catch (roomErr) {
+            console.warn('[Users Route] Room auto-provisioning notice:', roomErr.message);
+        }
+
         return res.json({ success: true, user: newUser });
     } catch (e) {
         console.error('[Users Route] Create user error:', e);
