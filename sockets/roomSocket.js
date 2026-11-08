@@ -13,7 +13,7 @@ let globalRoomWss = null;
  */
 async function broadcastPopularRooms(wss) {
     try {
-        const rooms = await Room.find({ isLive: true, heatScore: { $gte: 10 } })
+        const rooms = await Room.find({ isLive: true, onlineCount: { $gte: 1 }, heatScore: { $gte: 10 }, isBlocked: { $ne: true } })
             .sort({ heatScore: -1, onlineCount: -1, updatedAt: -1 })
             .limit(50)
             .lean();
@@ -105,6 +105,12 @@ function setupRoomSocket(server) {
                     case 'room:send_emoji':
                     case 'seat_emoji':
                         await stageSeatHandler.handleSendSeatEmoji(data, ws);
+                        break;
+
+                    case 'mic_state':
+                    case 'mic:state':
+                    case 'room:mic_state':
+                        await stageSeatHandler.handleMicState(data, ws);
                         break;
 
                     case 'room:kick':
