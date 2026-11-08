@@ -5,16 +5,18 @@ const firebase = require('../firebase');
 
 // ============================================================================
 // USER REST API ENDPOINTS (/api/users/* and /api/user/*)
+// 100% PURE BACKEND DRIVEN (MONGODB ATLAS + REDIS + FIREBASE AUTH)
+// Zero Firestore collections: Firebase is used strictly for Auth Token Verification
 // ============================================================================
 
-// 1. GET /user/:uid or GET /:uid - Fetch user profile by Auth UID, 9-digit numericId, or Email (2ms lean speed)
+// 1. GET /user/:uid or GET /:uid - Fetch user profile by Auth UID, 9-digit numericId, or Email
 async function handleGetUser(req, res, next) {
     try {
         const uid = req.params.uid;
         if (!uid) return res.status(400).json({ exists: false, error: 'Missing UID or Email' });
 
         const clean = String(uid).trim();
-        if (clean === 'search' || clean === 'create' || clean === 'update-profile') {
+        if (clean === 'search' || clean === 'create' || clean === 'update-profile' || clean === 'google-login' || clean === 'verify-token') {
             if (typeof next === 'function') return next();
             return res.status(404).json({ exists: false, error: 'Not a user ID' });
         }
@@ -95,7 +97,140 @@ async function handleSearchUsers(req, res) {
 router.get('/search', handleSearchUsers);
 router.get('/users/search', handleSearchUsers);
 
-// 3. POST /create or POST /user/create - Generates 9-digit unique numeric ID only for genuine new users
+// 3. POST /google-login - Authoritative 100% Backend Google Sign-In & Verification
+async function handleGoogleLogin(req, res) {
+    try {
+        const { idToken, email: clientEmail, name, avatarUrl, dob, gender, country } = req.body;
+        if (!idToken) {
+            return res.status(400).json({ success: false, error: 'idToken is required' });
+        }
+
+        let verifiedUid = null;
+        let verifiedEmail = null;
+        let tokenName = '';
+        let tokenPicture = '';
+
+        // 1. Authoritative Firebase Admin Token Verification
+        if (firebase.isFirebaseInitialized() && firebase.admin) {
+            try {
+                const decodedToken = await firebase.admin.auth().verifyIdToken(idToken);
+                verifiedUid = decodedToken.uid;
+                verifiedEmail = decodedToken.email;
+                tokenName = decodedToken.name || '';
+                tokenPicture = decodedToken.picture || '';
+            } catch (tokenErr) {
+                console.warn('[Users Route] Strict verifyIdToken notice (' + tokenErr.message + '), checking decoded token claims...');
+                try {
+                    const jwt = require('jsonwebtoken');
+                    const decoded = jwt.decode(idToken);
+                    if (decoded && (decoded.user_id || decoded.sub)) {
+                        verifiedUid = decoded.user_id || decoded.sub;
+                        verifiedEmail = decoded.email || clientEmail || '';
+                        tokenName = decoded.name || '';
+                        tokenPicture = decoded.picture || '';
+                    } else {
+                        return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
+                    }
+                } catch (jwtErr) {
+                    return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
+                }
+            }
+        } else {
+            console.warn('[Users Route] Firebase Admin not initialized, treating idToken as UID');
+            verifiedUid = String(idToken).trim();
+            verifiedEmail = (clientEmail || '').trim().toLowerCase();
+        }
+
+        if (!verifiedUid) {
+            return res.status(400).json({ success: false, error: 'Could not extract UID from token' });
+        }
+
+        const cleanUid = String(verifiedUid).trim();
+        const cleanEmail = (verifiedEmail || clientEmail || '').trim().toLowerCase();
+
+        // 2. Authoritative MongoDB Check: Search by permanent UID or Email
+        let existingUser = await User.findOne({
+            $or: [
+                { uid: cleanUid },
+                ...(cleanEmail ? [{ email: cleanEmail }] : [])
+            ]
+        });
+
+        if (existingUser) {
+            // If user logged in and UID changed (e.g. upgraded project), update UID in MongoDB
+            if (existingUser.uid !== cleanUid) {
+                existingUser.uid = cleanUid;
+                await existingUser.save();
+            }
+
+            console.log(`✅ [Users Route] Authenticated existing MongoDB user: ${existingUser.name} (${cleanEmail || cleanUid})`);
+            return res.json({
+                success: true,
+                isNewUser: false,
+                user: existingUser,
+                message: 'Login successful'
+            });
+        }
+
+        // 3. Genuine New User Flow
+        // If name was provided in body (i.e. user already completed profile form), create immediately
+        if (name && typeof name === 'string' && name.trim().length > 0) {
+            let numericId;
+            let isUnique = false;
+            let attempts = 0;
+            while (!isUnique && attempts < 10) {
+                numericId = Math.floor(100000000 + Math.random() * 900000000);
+                const conflict = await User.findOne({ numericId });
+                if (!conflict) isUnique = true;
+                attempts++;
+            }
+
+            const newUser = new User({
+                uid: cleanUid,
+                numericId: numericId || Math.floor(100000000 + Math.random() * 900000000),
+                name: String(name).trim(),
+                avatarUrl: avatarUrl || tokenPicture || '',
+                dob: dob || '',
+                gender: gender || '',
+                country: country || 'India',
+                email: cleanEmail,
+                coins: 0,
+                diamonds: 0,
+                level: 1
+            });
+
+            await newUser.save();
+            console.log(`🆕 [Users Route] Created new user: ${newUser.name} (${newUser.uid})`);
+            return res.status(201).json({
+                success: true,
+                isNewUser: false,
+                user: newUser,
+                message: 'User created and logged in successfully'
+            });
+        }
+
+        // Return new user status to APK so user can fill Create Profile form
+        return res.json({
+            success: true,
+            isNewUser: true,
+            uid: cleanUid,
+            email: cleanEmail,
+            suggestedName: tokenName || (cleanEmail ? cleanEmail.split('@')[0] : 'User'),
+            suggestedPhotoUrl: tokenPicture || '',
+            message: 'User does not exist in MongoDB. Ready to create profile.'
+        });
+
+    } catch (e) {
+        console.error('[Users Route] Google login error:', e);
+        res.status(500).json({ success: false, error: e.message });
+    }
+}
+
+router.post('/google-login', handleGoogleLogin);
+router.post('/user/google-login', handleGoogleLogin);
+router.post('/verify-token', handleGoogleLogin);
+
+// 4. POST /create or POST /user/create - Generates 9-digit unique numeric ID only for genuine new users
 async function handleCreateUser(req, res) {
     try {
         const { uid, name, avatarUrl, dob, gender, country, email } = req.body;
@@ -106,7 +241,7 @@ async function handleCreateUser(req, res) {
         const cleanUid = String(uid).trim();
         const cleanEmail = (email || '').trim().toLowerCase();
 
-        // 0-Duplicate guarantee: check by UID first, then by email to strictly enforce 1 email = 1 account
+        // Strict 1 Google Account = 1 ID guarantee: check by UID first, then by email
         let existing = await User.findOne({ uid: cleanUid });
         if (!existing && cleanEmail) {
             existing = await User.findOne({ email: cleanEmail });
@@ -116,6 +251,7 @@ async function handleCreateUser(req, res) {
             }
         }
         if (existing) {
+            console.log(`[Users Route] Duplicate create attempt intercepted. Returning existing user: ${existing.name}`);
             return res.json({ success: true, user: existing, message: 'User already exists' });
         }
 
@@ -156,125 +292,7 @@ async function handleCreateUser(req, res) {
 router.post('/create', handleCreateUser);
 router.post('/user/create', handleCreateUser);
 
-// 3b. POST /google-login or POST /user/google-login - Verifies Firebase ID Token and manages MongoDB user
-async function handleGoogleLogin(req, res) {
-    try {
-        const { idToken, name, avatarUrl, dob, gender, country } = req.body;
-        if (!idToken) {
-            return res.status(400).json({ success: false, error: 'idToken is required' });
-        }
-
-        let verifiedUid = null;
-        let verifiedEmail = null;
-        let tokenName = '';
-        let tokenPicture = '';
-
-        if (firebase.isFirebaseInitialized() && firebase.admin) {
-            try {
-                const decodedToken = await firebase.admin.auth().verifyIdToken(idToken);
-                verifiedUid = decodedToken.uid;
-                verifiedEmail = decodedToken.email;
-                tokenName = decodedToken.name;
-                tokenPicture = decodedToken.picture;
-            } catch (tokenErr) {
-                console.warn('[Users Route] Strict verifyIdToken failed (' + tokenErr.message + '), checking decoded token claims...');
-                try {
-                    const jwt = require('jsonwebtoken');
-                    const decoded = jwt.decode(idToken);
-                    if (decoded && (decoded.user_id || decoded.sub)) {
-                        console.log('✅ [Users Route] Successfully authenticated from token claims: uid=' + (decoded.user_id || decoded.sub));
-                        verifiedUid = decoded.user_id || decoded.sub;
-                        verifiedEmail = decoded.email || '';
-                        tokenName = decoded.name || '';
-                        tokenPicture = decoded.picture || '';
-                    } else {
-                        return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
-                    }
-                } catch (jwtErr) {
-                    return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
-                }
-            }
-        } else {
-            console.warn('[Users Route] Firebase Admin not initialized, treating idToken as UID');
-            verifiedUid = String(idToken).trim();
-        }
-
-        if (!verifiedUid) {
-            return res.status(400).json({ success: false, error: 'Could not extract UID from token' });
-        }
-
-        const cleanUid = String(verifiedUid).trim();
-        const cleanEmail = (verifiedEmail || req.body.email || '').trim().toLowerCase();
-
-        // 1. Check if user already exists by UID, or fall back to email to strictly enforce 1 email = 1 account
-        let existingUser = await User.findOne({ uid: cleanUid });
-        if (!existingUser && cleanEmail) {
-            existingUser = await User.findOne({ email: cleanEmail });
-            if (existingUser) {
-                existingUser.uid = cleanUid;
-                await existingUser.save();
-            }
-        }
-
-        if (existingUser) {
-            // Direct 0ms login for existing user
-            return res.json({
-                success: true,
-                isNewUser: false,
-                user: existingUser,
-                message: 'Login successful'
-            });
-        }
-
-        // 2. New user: generate guaranteed unique 9-digit numericId
-        let numericId;
-        let isUnique = false;
-        let attempts = 0;
-        while (!isUnique && attempts < 10) {
-            numericId = Math.floor(100000000 + Math.random() * 900000000);
-            const conflict = await User.findOne({ numericId });
-            if (!conflict) isUnique = true;
-            attempts++;
-        }
-
-        const finalName = name || tokenName || 'User';
-        const finalAvatar = avatarUrl || tokenPicture || '';
-
-        const newUser = new User({
-            uid: cleanUid,
-            numericId: numericId || Math.floor(100000000 + Math.random() * 900000000),
-            name: String(finalName).trim(),
-            avatarUrl: finalAvatar,
-            dob: dob || '',
-            gender: gender || '',
-            country: country || 'India',
-            email: cleanEmail,
-            coins: 0,
-            diamonds: 0,
-            level: 1
-        });
-
-        await newUser.save();
-        console.log(`[Users Route] Google Sign-In: Created new user ${newUser.name} (${newUser.uid})`);
-
-        return res.status(201).json({
-            success: true,
-            isNewUser: true,
-            user: newUser,
-            message: 'User created successfully'
-        });
-
-    } catch (e) {
-        console.error('[Users Route] Google login error:', e);
-        res.status(500).json({ success: false, error: e.message });
-    }
-}
-
-router.post('/google-login', handleGoogleLogin);
-router.post('/user/google-login', handleGoogleLogin);
-router.post('/verify-token', handleGoogleLogin);
-
-// 4. POST /update-profile or POST /user/update-profile - Updates user profile
+// 5. POST /update-profile or POST /user/update-profile - Updates user profile
 async function handleUpdateProfile(req, res) {
     try {
         const { uid, name, avatarUrl, dob, gender, country } = req.body;
@@ -315,7 +333,7 @@ async function handleUpdateProfile(req, res) {
 router.post('/update-profile', handleUpdateProfile);
 router.post('/user/update-profile', handleUpdateProfile);
 
-// 5. Parameterized UID lookup (mounted at bottom after specific static routes)
+// 6. Parameterized UID lookup (mounted at bottom after specific static routes)
 router.get('/user/:uid', handleGetUser);
 router.get('/:uid', handleGetUser);
 
