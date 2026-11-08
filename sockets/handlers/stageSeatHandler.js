@@ -24,6 +24,9 @@ const stageSeatHandler = {
                 }
             } catch (_) {}
         }
+        if ((!roomId || roomId === rawRoomId) && meta?.canonicalRoomId) {
+            roomId = meta.canonicalRoomId;
+        }
         if (!roomId) roomId = rawRoomId;
 
         const targetUserId = String(data.userId || meta?.userId || '').trim();
@@ -39,15 +42,72 @@ const stageSeatHandler = {
             if (isMuted !== null) seat.isMuted = isMuted;
 
             if (onSeat && targetUserId) {
-                seat.userId = targetUserId;
-                seat.userName = data.userName || seat.userName || 'User';
-                seat.userAvatar = data.userAvatar || seat.userAvatar || '';
-            } else if (!onSeat && targetUserId) {
-                if (seat.userId === targetUserId) {
-                    seat.userId = null;
-                    seat.userName = null;
-                    seat.userAvatar = null;
+                // Zero-Trust Rule: Check if seat is locked
+                if (seat.isLocked) {
+                    const isRoomOwner = roomDoc && (roomDoc.ownerUid === targetUserId || roomDoc.roomId === targetUserId);
+                    if (!isRoomOwner) {
+                        ws.send(JSON.stringify({
+                            type: 'seat:rejected',
+                            roomId,
+                            seatIndex,
+                            reason: 'SEAT_LOCKED',
+                            message: `Seat ${seatIndex + 1} is locked by host!`
+                        }));
+                        return;
+                    }
                 }
+
+                // Zero-Trust Rule: Check if seat is already occupied by another user
+                if (seat.userId && String(seat.userId).trim() !== targetUserId) {
+                    ws.send(JSON.stringify({
+                        type: 'seat:rejected',
+                        roomId,
+                        seatIndex,
+                        reason: 'SEAT_ALREADY_OCCUPIED',
+                        message: `Seat ${seatIndex + 1} is already occupied by ${seat.userName || 'another user'}!`
+                    }));
+                    return;
+                }
+
+                // If user was on another seat, vacate that seat first
+                seats.forEach((otherSeat, otherIdx) => {
+                    if (otherIdx !== seatIndex && otherSeat && String(otherSeat.userId || '').trim() === targetUserId) {
+                        otherSeat.userId = null;
+                        otherSeat.userName = null;
+                        otherSeat.userAvatar = null;
+                        otherSeat.userCustomId = '';
+                        otherSeat.isSpeaking = false;
+                        const vacatePacket = {
+                            type: 'seat:update',
+                            roomId,
+                            seatIndex: otherIdx,
+                            userId: '',
+                            userName: '',
+                            userAvatar: '',
+                            userCustomId: '',
+                            isLocked: Boolean(otherSeat.isLocked),
+                            isMuted: Boolean(otherSeat.isMuted),
+                            isSpeaking: false
+                        };
+                        roomChannelManager.broadcastToRoom(roomId, vacatePacket);
+                    }
+                });
+
+                seat.userId = targetUserId;
+                seat.userName = data.userName || data.name || seat.userName || 'User';
+                seat.userAvatar = data.userAvatar || data.avatar || seat.userAvatar || '';
+                seat.userCustomId = data.userCustomId || '';
+            } else {
+                // Clear the seat completely when leaving or targetUserId is empty
+                seat.userId = null;
+                seat.userName = null;
+                seat.userAvatar = null;
+                seat.userCustomId = '';
+                seat.isSpeaking = false;
+            }
+
+            if (data.isSpeaking !== undefined) {
+                seat.isSpeaking = Boolean(data.isSpeaking);
             }
 
             // O(1) Targeted Seat update broadcast to room viewers across canonical & alias IDs
@@ -59,12 +119,17 @@ const stageSeatHandler = {
                 userId: seat.userId || '',
                 userName: seat.userName || '',
                 userAvatar: seat.userAvatar || '',
-                isLocked: seat.isLocked,
-                isMuted: seat.isMuted
+                userCustomId: seat.userCustomId || '',
+                isLocked: Boolean(seat.isLocked),
+                isMuted: Boolean(seat.isMuted),
+                isSpeaking: Boolean(seat.isSpeaking)
             };
             roomChannelManager.broadcastToRoom(roomId, seatPacket);
             if (rawRoomId && rawRoomId !== roomId) {
                 roomChannelManager.broadcastToRoom(rawRoomId, seatPacket);
+            }
+            if (meta?.roomId && meta.roomId !== roomId && meta.roomId !== rawRoomId) {
+                roomChannelManager.broadcastToRoom(meta.roomId, seatPacket);
             }
 
             // Async MongoDB persistence
@@ -166,6 +231,44 @@ const stageSeatHandler = {
                 isSvga: Boolean(data.isSvga),
                 timestamp: Date.now()
             });
+        }
+    },
+
+    /**
+     * Handles Live Mic State (Speaking wave animation, Mute/Unmute)
+     */
+    async handleMicState(data, ws) {
+        const meta = roomChannelManager.getMetadata(ws);
+        const rawRoomId = String(data.roomId || meta?.roomId || '').trim();
+        const roomId = meta?.canonicalRoomId || roomChannelManager.getCanonicalId(rawRoomId) || rawRoomId;
+        const targetUserId = String(data.userId || meta?.userId || '').trim();
+        const seatIndex = data.seatIndex !== undefined ? Number(data.seatIndex) : -1;
+        const isSpeaking = Boolean(data.isSpeaking);
+        const isMuted = data.isMuted !== undefined ? Boolean(data.isMuted) : false;
+
+        if (roomId) {
+            if (seatIndex >= 0 && seatIndex < 16) {
+                const seats = cacheService.getOrCreateRoomSeats(roomId);
+                const seat = seats[seatIndex];
+                if (seat) {
+                    seat.isSpeaking = isSpeaking;
+                    if (data.isMuted !== undefined) seat.isMuted = isMuted;
+                }
+            }
+
+            const micPacket = {
+                type: 'mic:state',
+                roomId,
+                userId: targetUserId,
+                seatIndex,
+                isSpeaking,
+                isMuted
+            };
+
+            roomChannelManager.broadcastToRoom(roomId, micPacket);
+            if (rawRoomId && rawRoomId !== roomId) {
+                roomChannelManager.broadcastToRoom(rawRoomId, micPacket);
+            }
         }
     }
 };
