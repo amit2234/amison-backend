@@ -8,8 +8,8 @@ const mongoose = require('mongoose');
 // - numericId: 9-digit unique public display ID
 // ============================================================================
 const userSchema = new mongoose.Schema({
-    uid: { type: String, required: true, unique: true, index: true },
-    numericId: { type: Number, required: true, unique: true, index: true },
+    uid: { type: String, required: true, unique: true },
+    numericId: { type: Number, required: true, unique: true },
     name: { type: String, required: true, trim: true },
     avatarUrl: { type: String, default: "" },
     dob: { type: String, default: "" },
@@ -26,10 +26,7 @@ const userSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });
-
-userSchema.index({ uid: 1 }, { unique: true });
-userSchema.index({ email: 1 });
-userSchema.index({ numericId: 1 }, { unique: true });
+// Note: Indexes for uid, email, and numericId are declared on schema fields above.
 
 const User = mongoose.models.User || mongoose.model('User', userSchema);
 
