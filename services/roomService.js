@@ -8,10 +8,11 @@ const LOCAL_CACHE_TTL_MS = 3000;
 
 async function generateUnique6DigitId() {
     let attempts = 0;
-    while (attempts < 20) {
+    while (attempts < 30) {
         const id = Math.floor(100000 + Math.random() * 900000).toString();
-        const existing = await Room.findOne({ displayRoomId: id });
-        if (!existing) return id;
+        const existingRoom = await Room.findOne({ $or: [{ displayRoomId: id }, { roomId: id }] }).lean();
+        const existingUser = await User.findOne({ $or: [{ roomId: id }, { numericId: Number(id) }] }).lean();
+        if (!existingRoom && !existingUser) return id;
         attempts++;
     }
     return Math.floor(100000 + Math.random() * 900000).toString();
@@ -49,6 +50,12 @@ async function cleanupDuplicateRooms() {
                 seenOwners.add(owner);
             }
         }
+
+        // Zero-Trust: Reset stale empty rooms so 0 user rooms are never marked live with fake heat
+        await Room.updateMany(
+            { $or: [{ onlineCount: { $lte: 0 } }, { onlineCount: null }] },
+            { $set: { isLive: false, onlineCount: 0, heatScore: 0 } }
+        );
     } catch (e) {
         console.error('Cleanup duplicate rooms error:', e);
     }
@@ -62,7 +69,12 @@ const RoomService = {
             return { source: 'memory_cache', rooms: localMemoryRoomsCache };
         }
 
-        const activeRooms = await Room.find({ isLive: true })
+        const activeRooms = await Room.find({
+            isLive: true,
+            onlineCount: { $gte: 1 },
+            heatScore: { $gte: 10 },
+            isBlocked: { $ne: true }
+        })
             .sort({ heatScore: -1, onlineCount: -1, updatedAt: -1 })
             .limit(50)
             .lean();
@@ -80,8 +92,8 @@ const RoomService = {
                 }
             }
 
-            const liveCount = Math.max(1, r.onlineCount || 1);
-            const heat = r.heatScore > 0 ? r.heatScore : Math.max(10, liveCount * 10);
+            const liveCount = Number(r.onlineCount || 0);
+            const heat = Number(r.heatScore || 0);
             formattedRooms.push({
                 id: r.displayRoomId || r.roomId || r._id,
                 publicRoomId: r.displayRoomId || r.roomId,
@@ -102,7 +114,7 @@ const RoomService = {
                 speakerSlots: 16,
                 tags: r.category || '#Chill,#Talk,#Hindi',
                 roomHeat: heat,
-                isLive: !r.isBlocked
+                isLive: (liveCount > 0 && heat >= 10 && !r.isBlocked)
             });
         }
 
@@ -208,9 +220,9 @@ const RoomService = {
                 announcement: announcement || "Welcome to my room!",
                 isLocked: Boolean(isLocked),
                 pinCode: pinCode || "",
-                isLive: true,
-                onlineCount: 1,
-                heatScore: 10
+                isLive: false,
+                onlineCount: 0,
+                heatScore: 0
             });
         }
 
@@ -242,7 +254,7 @@ const RoomService = {
                     { displayRoomId: cleanRoomId }
                 ]
             },
-            { $set: { isLive: false, onlineCount: 0 } }
+            { $set: { isLive: false, onlineCount: 0, heatScore: 0 } }
         );
 
         localMemoryRoomsCache = null;
