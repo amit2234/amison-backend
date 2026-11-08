@@ -1,4 +1,3 @@
-
 const RoomService = require('../services/roomService');
 
 const RoomController = {
@@ -39,6 +38,16 @@ const RoomController = {
         }
     },
 
+    async updateRoomDetails(req, res) {
+        try {
+            const roomObj = await RoomService.createOrUpdateRoom(req.body);
+            return res.json({ success: true, room: roomObj });
+        } catch (e) {
+            console.error('[RoomController] Update room details error:', e);
+            return res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
     async closeRoom(req, res) {
         try {
             const { ownerUid, roomId } = req.body || {};
@@ -69,6 +78,51 @@ const RoomController = {
             return res.json({ success: true, room });
         } catch (e) {
             console.error('[RoomController] Get room details error:', e);
+            return res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async kickUser(req, res) {
+        try {
+            const { roomId, targetUserId, durationHours, hostName } = req.body || {};
+            const result = await RoomService.kickUser(roomId, targetUserId, durationHours, hostName);
+            return res.json({ success: true, ...result });
+        } catch (e) {
+            console.error('[RoomController] Kick user error:', e);
+            return res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async checkKickStatus(req, res) {
+        try {
+            const { roomId, userId } = req.query || {};
+            const kickInfo = await RoomService.isUserKicked(roomId, userId);
+            if (typeof kickInfo === 'boolean') {
+                return res.json({ success: true, isKicked: kickInfo, remainingSeconds: 0, hostName: '' });
+            }
+            return res.json({ success: true, ...kickInfo });
+        } catch (e) {
+            return res.status(500).json({ success: false, isKicked: false, error: e.message });
+        }
+    },
+
+    async unbanUser(req, res) {
+        try {
+            const { roomId, userId } = req.body || {};
+            const result = await RoomService.unbanUser(roomId, userId);
+            return res.json({ success: true, ...result });
+        } catch (e) {
+            return res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async updateMemberRole(req, res) {
+        try {
+            const { roomId, targetUserId, newRole, requesterUid } = req.body || {};
+            const result = await RoomService.updateMemberRole(roomId, targetUserId, newRole, requesterUid);
+            return res.json({ success: true, ...result });
+        } catch (e) {
+            console.error('[RoomController] Update member role error:', e);
             return res.status(500).json({ success: false, error: e.message });
         }
     }
