@@ -23,6 +23,14 @@ const roomSchema = new mongoose.Schema({
     level: { type: Number, default: 1 },
     coOwners: { type: [String], default: [] },
     admins: { type: [String], default: [] },
+    kickouts: {
+        type: [{
+            userId: { type: String, required: true },
+            kickedBy: { type: String, default: "" },
+            expiryTimestamp: { type: Number, required: true }
+        }],
+        default: []
+    },
     // 16-Seat Grid (4x4) Stage Management
     seats: {
         type: [{
