@@ -264,6 +264,164 @@ const RoomService = {
             ]
         }).lean();
         return room;
+    },
+
+    async resolveRoomUid(displayId) {
+        const clean = String(displayId || '').trim();
+        if (!clean) return null;
+        const room = await Room.findOne({
+            $or: [
+                { displayRoomId: clean },
+                { roomId: clean },
+                { ownerUid: clean }
+            ]
+        }).select('ownerUid roomId').lean();
+        if (room && (room.ownerUid || room.roomId)) {
+            return room.ownerUid || room.roomId;
+        }
+        if (/^\d+$/.test(clean)) {
+            const userDoc = await User.findOne({ numericId: Number(clean) }).select('uid').lean();
+            if (userDoc && userDoc.uid) return String(userDoc.uid).trim();
+        }
+        return null;
+    },
+
+    async kickUser(roomId, targetUserId, durationHours = 3, hostName = 'Host') {
+        const cleanRoomId = String(roomId || '').trim();
+        const cleanTargetId = String(targetUserId || '').trim();
+        if (!cleanRoomId || !cleanTargetId) throw new Error('Missing roomId or targetUserId');
+
+        const resolvedUid = await resolveTrueOwnerUid(cleanRoomId);
+        const room = await Room.findOne({
+            $or: [
+                { displayRoomId: cleanRoomId },
+                { ownerUid: resolvedUid },
+                { roomId: resolvedUid },
+                { roomId: cleanRoomId }
+            ]
+        });
+        if (!room) throw new Error('Room not found');
+
+        const expiry = Date.now() + (Number(durationHours) || 3) * 3600 * 1000;
+        room.kickouts = (room.kickouts || []).filter(k => k.userId !== cleanTargetId && k.expiryTimestamp > Date.now());
+        room.kickouts.push({
+            userId: cleanTargetId,
+            kickedBy: hostName,
+            expiryTimestamp: expiry
+        });
+
+        // If target user is on a seat, clear that seat
+        if (room.seats && Array.isArray(room.seats)) {
+            for (const s of room.seats) {
+                if (s.userId === cleanTargetId) {
+                    s.userId = null;
+                    s.name = null;
+                    s.avatar = null;
+                }
+            }
+        }
+        await room.save();
+
+        try {
+            const roomChannelManager = require('../sockets/managers/roomChannelManager');
+            roomChannelManager.broadcastToRoom(room.roomId || room.displayRoomId, {
+                type: 'room:kicked',
+                targetUserId: cleanTargetId,
+                kickedBy: hostName,
+                expiryTimestamp: expiry
+            });
+        } catch (_) {}
+
+        return { success: true, expiryTimestamp: expiry };
+    },
+
+    async isUserKicked(roomId, userId) {
+        const cleanRoomId = String(roomId || '').trim();
+        const cleanUserId = String(userId || '').trim();
+        if (!cleanRoomId || !cleanUserId) return false;
+
+        const resolvedUid = await resolveTrueOwnerUid(cleanRoomId);
+        const room = await Room.findOne({
+            $or: [
+                { displayRoomId: cleanRoomId },
+                { ownerUid: resolvedUid },
+                { roomId: resolvedUid },
+                { roomId: cleanRoomId }
+            ]
+        }).lean();
+        const now = Date.now();
+        const activeKick = (room.kickouts || []).find(k => k.userId === cleanUserId && k.expiryTimestamp > now);
+        if (!activeKick) {
+            return { isKicked: false, expiryTimestamp: 0, remainingSeconds: 0, hostName: '' };
+        }
+        const remainingSeconds = Math.max(0, Math.round((activeKick.expiryTimestamp - now) / 1000));
+        return {
+            isKicked: true,
+            expiryTimestamp: activeKick.expiryTimestamp,
+            remainingSeconds,
+            hostName: activeKick.kickedBy || 'Host'
+        };
+    },
+
+    async unbanUser(roomId, userId) {
+        const cleanRoomId = String(roomId || '').trim();
+        const cleanUserId = String(userId || '').trim();
+        if (!cleanRoomId || !cleanUserId) return { success: false };
+
+        const resolvedUid = await resolveTrueOwnerUid(cleanRoomId);
+        const room = await Room.findOne({
+            $or: [
+                { displayRoomId: cleanRoomId },
+                { ownerUid: resolvedUid },
+                { roomId: resolvedUid },
+                { roomId: cleanRoomId }
+            ]
+        });
+        if (!room) return { success: false };
+        room.kickouts = (room.kickouts || []).filter(k => k.userId !== cleanUserId);
+        await room.save();
+        return { success: true };
+    },
+
+    async updateMemberRole(roomId, targetUserId, newRole, requesterUid = '') {
+        const cleanRoomId = String(roomId || '').trim();
+        const cleanTargetId = String(targetUserId || '').trim();
+        const role = String(newRole || '').trim().toLowerCase();
+        if (!cleanRoomId || !cleanTargetId) throw new Error('Missing parameters');
+
+        const resolvedUid = await resolveTrueOwnerUid(cleanRoomId);
+        const room = await Room.findOne({
+            $or: [
+                { displayRoomId: cleanRoomId },
+                { ownerUid: resolvedUid },
+                { roomId: resolvedUid },
+                { roomId: cleanRoomId }
+            ]
+        });
+        if (!room) throw new Error('Room not found');
+
+        // Clean from both coOwners and admins first
+        room.coOwners = (room.coOwners || []).filter(u => u !== cleanTargetId);
+        room.admins = (room.admins || []).filter(u => u !== cleanTargetId);
+
+        if (role === 'co-owner' || role === 'co_owner' || role === 'coowner') {
+            room.coOwners.push(cleanTargetId);
+        } else if (role === 'admin' || role === 'moderator') {
+            room.admins.push(cleanTargetId);
+        }
+
+        await room.save();
+
+        try {
+            const roomChannelManager = require('../sockets/managers/roomChannelManager');
+            roomChannelManager.broadcastToRoom(room.roomId || room.displayRoomId, {
+                type: 'room:role_update',
+                targetUserId: cleanTargetId,
+                newRole: role
+            });
+        } catch (_) {}
+
+        return { success: true, role };
     }
 };
 
