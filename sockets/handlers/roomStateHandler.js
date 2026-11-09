@@ -23,14 +23,16 @@ const roomStateHandler = {
             roomDoc = await Room.findOne({ $or: queryConditions }).lean();
             if (roomDoc) {
                 if (roomDoc.displayRoomId && roomDoc.ownerUid) {
-                    roomChannelManager.registerAlias(roomDoc.displayRoomId, roomDoc.ownerUid);
-                    roomChannelManager.registerAlias(roomDoc.roomId, roomDoc.ownerUid);
+                    if (typeof roomChannelManager.registerAlias === 'function') {
+                        roomChannelManager.registerAlias(roomDoc.displayRoomId, roomDoc.ownerUid);
+                        roomChannelManager.registerAlias(roomDoc.roomId, roomDoc.ownerUid);
+                    }
                 }
             }
         } catch (_) {}
 
         const canonicalRoomId = roomDoc ? (roomDoc.ownerUid || roomDoc.displayRoomId || roomId) : roomId;
-        if (displayRoomId && canonicalRoomId) {
+        if (displayRoomId && canonicalRoomId && typeof roomChannelManager.registerAlias === 'function') {
             roomChannelManager.registerAlias(displayRoomId, canonicalRoomId);
         }
 
