@@ -4,26 +4,27 @@ const roomChannelManager = require('../managers/roomChannelManager');
 
 /**
  * Handles 16-Mic Stage Seating, Mute/Unmute, and Lock/Unlock Events
+ * 100% Zero-Trust Server Authority Engine
  */
 const stageSeatHandler = {
     async handleSeatUpdate(data, ws, wss, broadcastPopularRooms) {
         const meta = roomChannelManager.getMetadata(ws);
         const rawRoomId = String(data.roomId || meta?.roomId || '').trim();
         let roomId = meta?.canonicalRoomId || roomChannelManager.getCanonicalId(rawRoomId) || rawRoomId;
+        let roomDoc = null;
 
-        if (!roomId || roomId === rawRoomId) {
-            try {
-                const roomDoc = await Room.findOne({
-                    $or: [{ displayRoomId: rawRoomId }, { ownerUid: rawRoomId }, { roomId: rawRoomId }]
-                }).lean();
-                if (roomDoc) {
-                    roomId = roomDoc.ownerUid || roomDoc.displayRoomId || rawRoomId;
-                    if (roomDoc.displayRoomId && roomDoc.ownerUid) {
-                        roomChannelManager.registerAlias(roomDoc.displayRoomId, roomDoc.ownerUid);
-                    }
+        try {
+            roomDoc = await Room.findOne({
+                $or: [{ displayRoomId: rawRoomId }, { ownerUid: rawRoomId }, { roomId: rawRoomId }]
+            }).lean();
+            if (roomDoc) {
+                roomId = roomDoc.ownerUid || roomDoc.displayRoomId || rawRoomId;
+                if (roomDoc.displayRoomId && roomDoc.ownerUid) {
+                    roomChannelManager.registerAlias(roomDoc.displayRoomId, roomDoc.ownerUid);
                 }
-            } catch (_) {}
-        }
+            }
+        } catch (_) {}
+
         if ((!roomId || roomId === rawRoomId) && meta?.canonicalRoomId) {
             roomId = meta.canonicalRoomId;
         }
@@ -42,7 +43,7 @@ const stageSeatHandler = {
             if (isMuted !== null) seat.isMuted = isMuted;
 
             if (onSeat && targetUserId) {
-                // Zero-Trust Rule: Check if seat is locked
+                // Zero-Trust Rule 1: Check if seat is locked by host
                 if (seat.isLocked) {
                     const isRoomOwner = roomDoc && (roomDoc.ownerUid === targetUserId || roomDoc.roomId === targetUserId);
                     if (!isRoomOwner) {
@@ -57,7 +58,7 @@ const stageSeatHandler = {
                     }
                 }
 
-                // Zero-Trust Rule: Check if seat is already occupied by another user
+                // Zero-Trust Rule 2: Check if seat is already occupied by another user (Reject race condition)
                 if (seat.userId && String(seat.userId).trim() !== targetUserId) {
                     ws.send(JSON.stringify({
                         type: 'seat:rejected',
@@ -69,7 +70,7 @@ const stageSeatHandler = {
                     return;
                 }
 
-                // If user was on another seat, vacate that seat first
+                // Zero-Trust Rule 3: If user was on another seat, vacate that seat first
                 seats.forEach((otherSeat, otherIdx) => {
                     if (otherIdx !== seatIndex && otherSeat && String(otherSeat.userId || '').trim() === targetUserId) {
                         otherSeat.userId = null;
