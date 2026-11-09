@@ -32,7 +32,8 @@ const stageSeatHandler = {
         }
         if (!roomId) roomId = rawRoomId;
 
-        const targetUserId = String(data.userId || meta?.userId || '').trim();
+        const rawUserId = data.userId !== undefined ? String(data.userId || '').trim() : '';
+        const targetUserId = (rawUserId === 'null' || rawUserId === 'undefined') ? '' : rawUserId;
         const onSeat = data.onSeat !== undefined ? Boolean(data.onSeat) : (targetUserId.length > 0);
         const seatIndex = data.seatIndex !== undefined ? Number(data.seatIndex) : -1;
         const isLocked = data.isLocked !== undefined ? Boolean(data.isLocked) : null;
@@ -61,7 +62,7 @@ const stageSeatHandler = {
                 }
 
                 // Zero-Trust Rule 2: Check if seat is already occupied by another user (Reject race condition)
-                if (seat.userId && String(seat.userId).trim() !== targetUserId) {
+                if (seat.userId && String(seat.userId).trim() !== targetUserId && seat.userId !== 'null') {
                     ws.send(JSON.stringify({
                         type: 'seat:rejected',
                         roomId,
@@ -97,9 +98,11 @@ const stageSeatHandler = {
                 });
 
                 seat.userId = targetUserId;
-                seat.userName = data.userName || data.name || seat.userName || 'User';
-                seat.userAvatar = data.userAvatar || data.avatar || seat.userAvatar || '';
-                seat.userCustomId = data.userCustomId || '';
+                const cleanName = (data.userName && data.userName !== 'null' && data.userName !== 'undefined') ? data.userName : (data.name && data.name !== 'null' ? data.name : (seat.userName || 'User'));
+                seat.userName = cleanName;
+                const cleanAvatar = (data.userAvatar && data.userAvatar !== 'null' && data.userAvatar !== 'undefined') ? data.userAvatar : (data.avatar && data.avatar !== 'null' ? data.avatar : (seat.userAvatar || ''));
+                seat.userAvatar = cleanAvatar;
+                seat.userCustomId = (data.userCustomId && data.userCustomId !== 'null') ? data.userCustomId : '';
             } else {
                 // Clear the seat completely when leaving or targetUserId is empty
                 seat.userId = null;
@@ -119,10 +122,10 @@ const stageSeatHandler = {
                 roomId,
                 rawRoomId,
                 seatIndex,
-                userId: seat.userId || '',
-                userName: seat.userName || '',
-                userAvatar: seat.userAvatar || '',
-                userCustomId: seat.userCustomId || '',
+                userId: (seat.userId === 'null' || !seat.userId) ? '' : seat.userId,
+                userName: (seat.userName === 'null' || !seat.userName) ? '' : seat.userName,
+                userAvatar: (seat.userAvatar === 'null' || !seat.userAvatar) ? '' : seat.userAvatar,
+                userCustomId: (seat.userCustomId === 'null' || !seat.userCustomId) ? '' : seat.userCustomId,
                 isLocked: Boolean(seat.isLocked),
                 isMuted: Boolean(seat.isMuted),
                 isSpeaking: Boolean(seat.isSpeaking)
