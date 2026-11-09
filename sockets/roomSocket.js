@@ -1,131 +1,219 @@
 const WebSocket = require('ws');
-const cacheService = require('../services/cacheService');
+const Room = require('../models/Room');
+const roomChannelManager = require('./managers/roomChannelManager');
+const roomStateHandler = require('./handlers/roomStateHandler');
+const stageSeatHandler = require('./handlers/stageSeatHandler');
+const roomChatHandler = require('./handlers/roomChatHandler');
+const roomGiftHandler = require('./handlers/roomGiftHandler');
+
+let globalRoomWss = null;
 
 /**
- * Dedicated 1-to-1 Personal Chat & Online Presence WebSocket Server
- * Path: '/ws/chat' (Multiplexed via server.on('upgrade') with noServer: true)
+ * Broadcast popular live rooms update
  */
-function setupChatSocket(server) {
+async function broadcastPopularRooms(wss) {
+    try {
+        const rooms = await Room.find({ isLive: true, onlineCount: { $gte: 1 }, heatScore: { $gte: 10 }, isBlocked: { $ne: true } })
+            .sort({ heatScore: -1, onlineCount: -1, updatedAt: -1 })
+            .limit(50)
+            .lean();
+
+        const packet = JSON.stringify({
+            type: 'popular_rooms_update',
+            rooms: rooms || []
+        });
+
+        const targetWss = wss || globalRoomWss;
+        if (targetWss && targetWss.clients) {
+            targetWss.clients.forEach((client) => {
+                if (client.readyState === WebSocket.OPEN) {
+                    client.send(packet);
+                }
+            });
+        }
+    } catch (e) {
+        console.error('[RoomSocket] Broadcast popular rooms error:', e.message);
+    }
+}
+
+/**
+ * Dedicated Room & 16-Seat Stage Real-Time WebSocket Server
+ * Path: '/ws/rooms' (Multiplexed via server.on('upgrade') with noServer: true)
+ */
+function setupRoomSocket(server) {
     const wss = new WebSocket.Server({ noServer: true });
-    console.log('📡 [ChatSocket] Dedicated 1-to-1 Personal Chat & Online Presence Server running on /ws/chat');
+    globalRoomWss = wss;
+    console.log('🎙️ [RoomSocket] High-Performance Channel-Based WebSocket Server running on /ws/rooms');
 
     wss.on('connection', (ws, req) => {
-        let currentUserId = null;
-        let currentConversationId = null;
-
         try {
             const urlObj = new URL(req.url, 'http://localhost');
-            const queryUserId = urlObj.searchParams.get('userId');
-            const headerUserId = req.headers['x-user-id'];
-            currentUserId = (queryUserId || headerUserId || '').trim();
-            if (currentUserId) {
-                cacheService.setUserOnline(currentUserId, ws);
-                console.log(`[ChatSocket] User registered online: ${currentUserId}`);
+            const userId = (urlObj.searchParams.get('userId') || req.headers['x-user-id'] || '').trim();
+            const roomId = (urlObj.searchParams.get('roomId') || req.headers['x-room-id'] || '').trim();
+            const displayRoomId = (urlObj.searchParams.get('displayRoomId') || req.headers['x-display-room-id'] || '').trim();
+            if (displayRoomId && roomId) {
+                roomChannelManager.registerAlias(displayRoomId, roomId);
             }
-        } catch (e) {
-            console.error('[ChatSocket] Error parsing connection request:', e.message);
-        }
+            if (roomId && userId) {
+                roomChannelManager.joinRoomChannel(roomId, userId, ws);
+            }
+        } catch (_) {}
 
         ws.on('message', async (rawMessage) => {
             try {
                 const data = JSON.parse(rawMessage.toString());
+                const eventType = data.type;
 
-                // 0. General user registration / association
-                if (data.userId && !currentUserId) {
-                    currentUserId = String(data.userId).trim();
-                    cacheService.setUserOnline(currentUserId, ws);
+                switch (eventType) {
+                    case 'room:join':
+                    case 'join_room':
+                        await roomStateHandler.handleJoinRoom(data, ws, wss, broadcastPopularRooms);
+                        break;
+
+                    case 'room:seat':
+                    case 'seat_update':
+                        await stageSeatHandler.handleSeatUpdate(data, ws, wss, broadcastPopularRooms);
+                        break;
+
+                    case 'room:seat_toggle_lock':
+                    case 'seat:toggle_lock':
+                        await stageSeatHandler.handleSeatToggleLock(data, ws);
+                        break;
+
+                    case 'room:leave':
+                    case 'leave_room':
+                        await roomStateHandler.handleLeaveRoom(data, ws, wss, broadcastPopularRooms);
+                        break;
+
+                    case 'room:chat':
+                    case 'chat_message':
+                        roomChatHandler.handleRoomChat(data, ws);
+                        break;
+
+                    case 'room:typing':
+                    case 'typing':
+                        roomChatHandler.handleRoomTyping(data, ws);
+                        break;
+
+                    case 'gift:send':
+                    case 'room:gift_send':
+                    case 'send_gift':
+                        await roomGiftHandler.handleSendGift(data, ws);
+                        break;
+
+                    case 'send_seat_emoji':
+                    case 'room:send_emoji':
+                    case 'seat_emoji':
+                        await stageSeatHandler.handleSendSeatEmoji(data, ws);
+                        break;
+
+                    case 'mic_state':
+                    case 'mic:state':
+                    case 'room:mic_state':
+                        await stageSeatHandler.handleMicState(data, ws);
+                        break;
+
+                    case 'room:kick':
+                    case 'kick_user':
+                        try {
+                            const RoomService = require('../services/roomService');
+                            await RoomService.kickUser(data.roomId, data.targetUserId, data.durationHours || 3, data.hostName || 'Host');
+                        } catch (kErr) {
+                            console.error('[RoomSocket] Kick error:', kErr.message);
+                        }
+                        break;
+
+                    case 'ping':
+                        ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+                        break;
+
+                    case 'rooms:poll':
+                    case 'popular_rooms:get':
+                        await broadcastPopularRooms(wss);
+                        break;
+
+                    default:
+                        break;
                 }
-
-                // 1. User joins conversation room or registers
-                if (data.type === 'dm:join' || data.type === 'user:register' || data.type === 'auth:register') {
-                    currentUserId = data.userId ? String(data.userId).trim() : currentUserId;
-                    currentConversationId = data.conversationId || currentConversationId;
-                    if (currentUserId) {
-                        cacheService.setUserOnline(currentUserId, ws);
-                    }
-                }
-
-                // 2. Real-Time Typing Indicator Event
-                else if (data.type === 'dm:typing') {
-                    const recipientId = data.recipientId ? String(data.recipientId).trim() : null;
-                    const recipientSocket = recipientId ? cacheService.getOnlineUserSocket(recipientId) : null;
-
-                    if (recipientSocket && recipientSocket.readyState === WebSocket.OPEN) {
-                        recipientSocket.send(JSON.stringify({
-                            type: 'dm:typing_update',
-                            conversationId: data.conversationId,
-                            userId: data.senderId,
-                            isTyping: Boolean(data.isTyping)
-                        }));
-                    }
-                }
-
-                // 3. Fast 1-to-1 Real-Time Message Send
-                else if (data.type === 'dm:send') {
-                    const recipientId = data.recipientId ? String(data.recipientId).trim() : null;
-                    const recipientSocket = recipientId ? cacheService.getOnlineUserSocket(recipientId) : null;
-
-                    const messagePacket = {
-                        type: 'dm:receive',
-                        messageId: data.clientMessageId || `${Date.now()}`,
-                        conversationId: data.conversationId,
-                        senderId: data.senderId,
-                        senderName: data.senderName || 'User',
-                        senderAvatar: data.senderAvatar || '',
-                        text: data.text || '',
-                        messageType: data.messageType || 'text',
-                        timestamp: data.timestamp || Date.now()
-                    };
-
-                    ws.send(JSON.stringify({
-                        type: 'dm:ack',
-                        clientMessageId: data.clientMessageId,
-                        status: 'sent',
-                        timestamp: Date.now()
-                    }));
-
-                    if (recipientSocket && recipientSocket.readyState === WebSocket.OPEN) {
-                        recipientSocket.send(JSON.stringify(messagePacket));
-                    }
-                }
-
-                // 4. Online Status Query
-                else if (data.type === 'user:status_check') {
-                    const targetId = data.targetUserId ? String(data.targetUserId).trim() : null;
-                    const isOnline = targetId ? cacheService.isUserOnline(targetId) : false;
-                    ws.send(JSON.stringify({
-                        type: 'user:status_result',
-                        targetUserId: targetId,
-                        isOnline
-                    }));
-                }
-
-                // 5. Keep-Alive Heartbeat Ping/Pong
-                else if (data.type === 'ping') {
-                    ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
-                }
-
             } catch (err) {
-                console.error('[ChatSocket] Error parsing message:', err.message);
+                console.error('[RoomSocket] Message handling error:', err.message);
             }
         });
 
-        ws.on('close', () => {
-            if (currentUserId) {
-                cacheService.removeUserOnline(currentUserId);
+        ws.on('close', async () => {
+            const meta = roomChannelManager.handleDisconnect(ws);
+            if (meta && meta.roomId) {
+                await roomStateHandler.handleLeaveRoom({ roomId: meta.roomId, userId: meta.userId }, ws, wss, broadcastPopularRooms);
             }
         });
 
         ws.on('error', (err) => {
-            console.warn('[ChatSocket] Socket warning:', err.message);
+            console.warn('[RoomSocket] Socket error:', err.message);
         });
     });
     return wss;
 }
 
 /**
- * Direct real-time unicast to a specific user UID's connected WebSocket
+ * Helper Broadcast Functions (Targeted O(1) Room Channels)
  */
-setupChatSocket.emitToUser = cacheService.emitToUser;
+function broadcastGiftCatalogSync(payload) {
+    if (!globalRoomWss || !globalRoomWss.clients) return;
+    const packet = JSON.stringify({
+        type: 'gift_catalog_sync',
+        action: payload.action || 'sync',
+        gift: payload.gift,
+        gifts: payload.gifts
+    });
+    globalRoomWss.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(packet);
+        }
+    });
+}
 
-module.exports = setupChatSocket;
+function broadcastRoomGift(payload) {
+    const roomId = String(payload.roomId || '').trim();
+    if (!roomId) return;
+
+    const giftPacket = {
+        type: 'room:gift_broadcast',
+        roomId,
+        senderId: payload.senderId,
+        senderName: payload.senderName,
+        senderAvatar: payload.senderAvatar,
+        receiverId: payload.receiverId,
+        receiverName: payload.receiverName,
+        receiverAvatar: payload.receiverAvatar,
+        targetMicIndex: payload.targetMicIndex !== undefined ? payload.targetMicIndex : -1,
+        giftId: payload.giftId,
+        giftName: payload.giftName,
+        iconUrl: payload.iconUrl,
+        animationUrl: payload.animationUrl,
+        animationType: payload.animationType,
+        multiplier: payload.multiplier || 1,
+        timestamp: payload.timestamp || Date.now()
+    };
+
+    const chatPacket = {
+        type: 'room:chat_receive',
+        roomId,
+        senderId: payload.senderId,
+        senderName: payload.senderName,
+        senderAvatar: payload.senderAvatar,
+        text: `sent ${payload.giftName || 'Gift'} x${payload.multiplier || 1} to ${payload.receiverName || 'Host'}`,
+        isGiftNotice: true,
+        giftIcon: payload.iconUrl,
+        timestamp: Date.now()
+    };
+
+    // O(1) Targeted Room Broadcast ONLY to clients in this voice room
+    roomChannelManager.broadcastToRoom(roomId, giftPacket);
+    roomChannelManager.broadcastToRoom(roomId, chatPacket);
+}
+
+setupRoomSocket.broadcastPopularRooms = broadcastPopularRooms;
+setupRoomSocket.broadcastGiftCatalogSync = broadcastGiftCatalogSync;
+setupRoomSocket.broadcastRoomGift = broadcastRoomGift;
+
+module.exports = setupRoomSocket;
