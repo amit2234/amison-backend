@@ -3,10 +3,10 @@ const cacheService = require('../services/cacheService');
 
 /**
  * Dedicated 1-to-1 Personal Chat & Online Presence WebSocket Server
- * Path: '/ws/chat'
+ * Path: '/ws/chat' (Multiplexed via server.on('upgrade') with noServer: true)
  */
 function setupChatSocket(server) {
-    const wss = new WebSocket.Server({ server, path: '/ws/chat' });
+    const wss = new WebSocket.Server({ noServer: true });
     console.log('📡 [ChatSocket] Dedicated 1-to-1 Personal Chat & Online Presence Server running on /ws/chat');
 
     wss.on('connection', (ws, req) => {
@@ -120,6 +120,7 @@ function setupChatSocket(server) {
             console.warn('[ChatSocket] Socket warning:', err.message);
         });
     });
+    return wss;
 }
 
 /**
