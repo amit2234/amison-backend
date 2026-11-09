@@ -20,7 +20,9 @@ const stageSeatHandler = {
             if (roomDoc) {
                 roomId = roomDoc.ownerUid || roomDoc.displayRoomId || rawRoomId;
                 if (roomDoc.displayRoomId && roomDoc.ownerUid) {
-                    roomChannelManager.registerAlias(roomDoc.displayRoomId, roomDoc.ownerUid);
+                    if (typeof roomChannelManager.registerAlias === 'function') {
+                        roomChannelManager.registerAlias(roomDoc.displayRoomId, roomDoc.ownerUid);
+                    }
                 }
             }
         } catch (_) {}
