@@ -120,16 +120,36 @@ const coupleRoutes = require('./routes/couple');
 app.use('/api/couple', coupleRoutes);
 
 // ============================================================================
-// MOUNT WEBSOCKET SERVERS
+// MOUNT WEBSOCKET SERVERS WITH DEDICATED UPGRADE ROUTER
 // ============================================================================
 
 // 1. Room Stage WebSocket (/ws/rooms) - 16 seats, stage lock/unlock, room live chat
 const setupRoomSocket = require('./sockets/roomSocket');
-setupRoomSocket(server);
+const roomWss = setupRoomSocket(server);
 
 // 2. Personal Chat WebSocket (/ws/chat) - 1-to-1 DM, online presence
 const setupChatSocket = require('./sockets/chatSocket');
-setupChatSocket(server);
+const chatWss = setupChatSocket(server);
+
+// Dedicated HTTP Upgrade Router (Zero 400 Bad Request collisions, Cloudflare & Render compliant)
+server.on('upgrade', (request, socket, head) => {
+    try {
+        const { pathname } = new URL(request.url, 'http://localhost');
+        if (pathname === '/ws/rooms' || pathname.startsWith('/ws/rooms/')) {
+            roomWss.handleUpgrade(request, socket, head, (ws) => {
+                roomWss.emit('connection', ws, request);
+            });
+        } else if (pathname === '/ws/chat' || pathname.startsWith('/ws/chat/')) {
+            chatWss.handleUpgrade(request, socket, head, (ws) => {
+                chatWss.emit('connection', ws, request);
+            });
+        } else {
+            socket.destroy();
+        }
+    } catch (_) {
+        try { socket.destroy(); } catch (e) {}
+    }
+});
 
 // Start Gateway Server
 server.listen(PORT, '0.0.0.0', () => {
