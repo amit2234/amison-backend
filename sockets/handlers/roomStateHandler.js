@@ -5,26 +5,34 @@ const roomChannelManager = require('../managers/roomChannelManager');
 
 /**
  * Handles Room State Events (Join Room, Leave Room, Heat Score Calculations)
+ * Zero-Delay Real-time Sync Engine
  */
 const roomStateHandler = {
     async handleJoinRoom(data, ws, wss, broadcastPopularRooms) {
         const roomId = String(data.roomId || '').trim();
         const userId = String(data.userId || '').trim();
+        const displayRoomId = String(data.displayRoomId || '').trim();
 
         if (!roomId || !userId) return;
 
         // 1. Resolve room document to link displayRoomId and ownerUid to the SAME WebSocket channel
         let roomDoc = null;
         try {
-            roomDoc = await Room.findOne({ $or: [{ displayRoomId: roomId }, { ownerUid: roomId }, { roomId }] }).lean();
+            const queryConditions = [{ displayRoomId: roomId }, { ownerUid: roomId }, { roomId }];
+            if (displayRoomId) queryConditions.push({ displayRoomId });
+            roomDoc = await Room.findOne({ $or: queryConditions }).lean();
             if (roomDoc) {
                 if (roomDoc.displayRoomId && roomDoc.ownerUid) {
                     roomChannelManager.registerAlias(roomDoc.displayRoomId, roomDoc.ownerUid);
+                    roomChannelManager.registerAlias(roomDoc.roomId, roomDoc.ownerUid);
                 }
             }
         } catch (_) {}
 
         const canonicalRoomId = roomDoc ? (roomDoc.ownerUid || roomDoc.displayRoomId || roomId) : roomId;
+        if (displayRoomId && canonicalRoomId) {
+            roomChannelManager.registerAlias(displayRoomId, canonicalRoomId);
+        }
 
         // Register client socket to canonical channel
         roomChannelManager.joinRoomChannel(canonicalRoomId, userId, ws);
@@ -99,9 +107,23 @@ const roomStateHandler = {
             onlineCount,
             participants: Array.from(roomParticipants.values())
         };
+        const joinPacket = {
+            type: 'user:join',
+            roomId: canonicalRoomId,
+            userId: canonicalUserId,
+            userName,
+            userAvatar,
+            role: isOnSeat ? 'Speaker' : 'Audience',
+            isJoining: true,
+            onlineCount,
+            participantCount: onlineCount,
+            heatScore
+        };
         roomChannelManager.broadcastToRoom(canonicalRoomId, statePacket);
+        roomChannelManager.broadcastToRoom(canonicalRoomId, joinPacket);
         if (canonicalRoomId !== roomId) {
             roomChannelManager.broadcastToRoom(roomId, statePacket);
+            roomChannelManager.broadcastToRoom(roomId, joinPacket);
         }
 
         // 6. Broadcast updated popular rooms list to all clients on Chatroom tab
@@ -175,9 +197,20 @@ const roomStateHandler = {
             onlineCount,
             participants: Array.from(roomParticipants.values())
         };
+        const leavePacket = {
+            type: 'user:leave',
+            roomId: canonicalRoomId,
+            userId,
+            isJoining: false,
+            onlineCount,
+            participantCount: onlineCount,
+            heatScore
+        };
         roomChannelManager.broadcastToRoom(canonicalRoomId, statePacket);
+        roomChannelManager.broadcastToRoom(canonicalRoomId, leavePacket);
         if (canonicalRoomId !== roomId) {
             roomChannelManager.broadcastToRoom(roomId, statePacket);
+            roomChannelManager.broadcastToRoom(roomId, leavePacket);
         }
 
         if (typeof broadcastPopularRooms === 'function') {
