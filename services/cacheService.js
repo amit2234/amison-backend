@@ -92,7 +92,15 @@ function getOrCreateRoomSeats(roomId) {
             seatLabel: (i + 1).toString()
         })));
     }
-    return roomSeatsMap.get(roomId);
+    const seats = roomSeatsMap.get(roomId);
+    if (Array.isArray(seats)) {
+        for (const s of seats) {
+            if (s.userId === 'null' || s.userId === 'undefined') s.userId = null;
+            if (s.userName === 'null' || s.userName === 'undefined') s.userName = null;
+            if (s.userAvatar === 'null' || s.userAvatar === 'undefined') s.userAvatar = null;
+        }
+    }
+    return seats;
 }
 
 /**
@@ -157,7 +165,11 @@ function getRoomParticipants(roomId) {
     if (!activeRooms.has(roomId)) {
         activeRooms.set(roomId, new Map());
     }
-    return activeRooms.get(roomId);
+    const map = activeRooms.get(roomId);
+    if (map.has('null')) map.delete('null');
+    if (map.has('undefined')) map.delete('undefined');
+    if (map.has('')) map.delete('');
+    return map;
 }
 
 function removeRoom(roomId) {
