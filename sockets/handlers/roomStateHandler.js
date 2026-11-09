@@ -13,7 +13,7 @@ const roomStateHandler = {
         const userId = String(data.userId || '').trim();
         const displayRoomId = String(data.displayRoomId || '').trim();
 
-        if (!roomId || !userId) return;
+        if (!roomId || !userId || userId === 'null' || userId === 'undefined') return;
 
         // 1. Resolve room document to link displayRoomId and ownerUid to the SAME WebSocket channel
         let roomDoc = null;
@@ -39,10 +39,13 @@ const roomStateHandler = {
         // Register client socket to canonical channel
         roomChannelManager.joinRoomChannel(canonicalRoomId, userId, ws);
 
-        // 2. Resolve real User Profile from MongoDB to prevent "User" fake placeholders
-        let userName = data.userName || data.name || '';
-        let userAvatar = data.userAvatar || data.avatarUrl || '';
-        let userNumericId = data.numericId || '';
+        // 2. Resolve real User Profile from MongoDB to prevent "User" or "null" fake placeholders
+        let rawName = String(data.userName || data.name || '').trim();
+        let userName = (rawName === 'null' || rawName === 'undefined') ? '' : rawName;
+        let rawAvatar = String(data.userAvatar || data.avatarUrl || '').trim();
+        let userAvatar = (rawAvatar === 'null' || rawAvatar === 'undefined') ? '' : rawAvatar;
+        let userNumericId = String(data.numericId || '').trim();
+        if (userNumericId === 'null' || userNumericId === 'undefined') userNumericId = '';
         let userLevel = data.level ? Number(data.level) : 1;
         let userGender = data.gender || 'Male';
 
@@ -64,23 +67,25 @@ const roomStateHandler = {
             if (!userAvatar) userAvatar = roomDoc.roomCover || '';
         }
 
-        if (!userName) userName = 'User';
+        if (!userName || userName === 'null' || userName === 'undefined') userName = 'User';
 
         const currentSeats = cacheService.getOrCreateRoomSeats(canonicalRoomId);
-        const existingSeatIndex = currentSeats.findIndex(s => s && (String(s.userId || '').trim() === canonicalUserId || String(s.userId || '').trim() === userId));
+        const existingSeatIndex = currentSeats.findIndex(s => s && s.userId && s.userId !== 'null' && (String(s.userId).trim() === canonicalUserId || String(s.userId).trim() === userId));
         const isOnSeat = existingSeatIndex >= 0;
 
         const roomParticipants = cacheService.getRoomParticipants(canonicalRoomId);
-        roomParticipants.set(canonicalUserId, {
-            userId: canonicalUserId,
-            name: userName,
-            avatar: userAvatar,
-            numericId: userNumericId,
-            level: userLevel,
-            gender: userGender,
-            onSeat: isOnSeat,
-            seatIndex: isOnSeat ? existingSeatIndex : -1
-        });
+        if (canonicalUserId && canonicalUserId !== 'null' && canonicalUserId !== 'undefined') {
+            roomParticipants.set(canonicalUserId, {
+                userId: canonicalUserId,
+                name: userName,
+                avatar: userAvatar,
+                numericId: userNumericId,
+                level: userLevel,
+                gender: userGender,
+                onSeat: isOnSeat,
+                seatIndex: isOnSeat ? existingSeatIndex : -1
+            });
+        }
 
         const onlineCount = roomParticipants.size;
         const stageMics = currentSeats.filter(s => s && s.userId).length;
