@@ -15,22 +15,84 @@ const upload = multer({
 });
 
 /**
- * Uploads a file buffer directly to Cloudinary
+ * Detects media format based on magic bytes signature (header check)
+ */
+function detectMediaMagicBytes(buffer) {
+    if (!buffer || buffer.length < 4) return null;
+    // GIF: GIF87a / GIF89a
+    if (buffer[0] === 0x47 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x38) {
+        return { ext: 'gif', mime: 'image/gif', resourceType: 'image', isAnimated: true };
+    }
+    // PNG: \x89PNG
+    if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+        return { ext: 'png', mime: 'image/png', resourceType: 'image', isAnimated: false };
+    }
+    // SVGA: PK.. (ZIP archive) OR 0x78 (zlib deflate)
+    const isZipSvga = buffer[0] === 0x50 && buffer[1] === 0x4B;
+    const isZlibSvga = buffer[0] === 0x78 && (buffer[1] === 0x9C || buffer[1] === 0x01 || buffer[1] === 0xDA);
+    if (isZipSvga || isZlibSvga) {
+        return { ext: 'svga', mime: 'application/octet-stream', resourceType: 'raw', isAnimated: true };
+    }
+    // SVG text
+    const headStr = buffer.slice(0, 64).toString('utf8').trim().toLowerCase();
+    if (headStr.startsWith('<?xml') || headStr.startsWith('<svg') || headStr.includes('<svg')) {
+        return { ext: 'svg', mime: 'image/svg+xml', resourceType: 'image', isAnimated: false };
+    }
+    // WEBP: RIFF....WEBP
+    if (buffer.length >= 12 && buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46) {
+        const webpStr = buffer.slice(8, 12).toString('ascii');
+        if (webpStr === 'WEBP') {
+            return { ext: 'webp', mime: 'image/webp', resourceType: 'image', isAnimated: true };
+        }
+    }
+    return null;
+}
+
+/**
+ * Uploads a file buffer directly to Cloudinary with Zero-Transcode Guarantee for SVGA & GIF
  * @param {Buffer} buffer 
  * @param {String} folder 
- * @param {String} resourceType ('image', 'raw', 'video')
+ * @param {String} resourceType ('image', 'raw', 'video', 'auto')
+ * @param {Object} options (filename, etc.)
  * @returns {Promise<Object>}
  */
-const uploadBufferToCloudinary = (buffer, folder = 'amison/store', resourceType = 'auto') => {
+const uploadBufferToCloudinary = (buffer, folder = 'amison/store', resourceType = 'auto', options = {}) => {
     return new Promise((resolve, reject) => {
+        const detected = detectMediaMagicBytes(buffer);
+        let finalResourceType = resourceType;
+
+        if (detected && detected.resourceType === 'raw') {
+            finalResourceType = 'raw';
+        } else if (resourceType === 'auto' && detected) {
+            finalResourceType = detected.resourceType;
+        }
+
+        const uploadOptions = {
+            folder: folder,
+            resource_type: finalResourceType
+        };
+
+        if (options.filename) {
+            uploadOptions.public_id = options.filename.replace(/\.[^/.]+$/, "");
+            uploadOptions.use_filename = true;
+            uploadOptions.unique_filename = true;
+        }
+
+        // ZERO-CORRUPTION RULE:
+        // Raw files (SVGA), GIF animations, and SVG must NEVER undergo format/lossy transcoding!
+        if (finalResourceType === 'raw' || (detected && (detected.ext === 'svga' || detected.ext === 'gif' || detected.ext === 'svg'))) {
+            if (detected && detected.ext === 'gif') {
+                uploadOptions.flags = 'animated';
+            }
+            // Strict NO transformation array
+        } else {
+            uploadOptions.transformation = [
+                { quality: 'auto', fetch_format: 'auto' }
+            ];
+        }
+
         const stream = cloudinary.uploader.upload_stream(
-            {
-                folder: folder,
-                resource_type: resourceType,
-                transformation: [
-                    { quality: 'auto', fetch_format: 'auto' }
-                ]
-            },
+            uploadOptions,
             (error, result) => {
                 if (error) return reject(error);
                 resolve(result);
@@ -43,5 +105,6 @@ const uploadBufferToCloudinary = (buffer, folder = 'amison/store', resourceType 
 module.exports = {
     cloudinary,
     upload,
-    uploadBufferToCloudinary
+    uploadBufferToCloudinary,
+    detectMediaMagicBytes
 };
