@@ -141,10 +141,17 @@ function setupRoomSocket(server) {
         });
 
         ws.on('close', async () => {
-            const meta = roomChannelManager.handleDisconnect(ws);
-            if (meta && meta.roomId) {
-                await roomStateHandler.handleLeaveRoom({ roomId: meta.roomId, userId: meta.userId }, ws, wss, broadcastPopularRooms);
+            const meta = roomChannelManager.getMetadata(ws);
+            if (meta && (meta.roomId || meta.canonicalRoomId)) {
+                await roomStateHandler.handleLeaveRoom({
+                    roomId: meta.roomId,
+                    canonicalRoomId: meta.canonicalRoomId,
+                    userId: meta.userId,
+                    userName: meta.userName,
+                    userCustomId: meta.userCustomId
+                }, ws, wss, broadcastPopularRooms);
             }
+            roomChannelManager.handleDisconnect(ws);
         });
 
         ws.on('error', (err) => {
