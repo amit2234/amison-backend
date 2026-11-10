@@ -40,10 +40,12 @@ class RoomChannelManager {
     /**
      * Subscribe a client socket to a room channel
      */
-    joinRoomChannel(roomId, userId, ws) {
+    joinRoomChannel(roomId, userId, ws, userName = '', userCustomId = '') {
         if (!roomId || !ws) return;
         const cleanRoomId = String(roomId).trim();
         const cleanUserId = String(userId || '').trim();
+        const cleanUserName = String(userName || '').trim();
+        const cleanUserCustomId = String(userCustomId || '').trim();
         const canonicalId = this.getCanonicalId(cleanRoomId);
 
         // 1. Remove from previous channel if room changed
@@ -72,6 +74,8 @@ class RoomChannelManager {
             roomId: cleanRoomId,
             canonicalRoomId: canonicalId,
             userId: cleanUserId,
+            userName: cleanUserName,
+            userCustomId: cleanUserCustomId,
             joinedAt: Date.now()
         });
     }
