@@ -1,0 +1,1917 @@
+    (function() {
+      var canvas = document.getElementById('gameCanvas');
+      if (!canvas) return;
+      var ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      var VIRTUAL_WIDTH = 720;
+      var VIRTUAL_HEIGHT = 1030;
+
+      canvas.width = VIRTUAL_WIDTH;
+      canvas.height = VIRTUAL_HEIGHT;
+
+      // Layout configuration
+      var IMG_SIZE = 675;
+      var IMG_X = 22.5;
+      var IMG_Y = 102.5; // Shifted 20 points down from 82.5 (total 30 points from original)
+      var scale = IMG_SIZE / 800; // 0.84375
+
+      // Exact Center coordinates of the 8 planets (Shifted 20 points down to 440px)
+      var CENTER_X = IMG_X + (400 * scale); // 360px
+      var CENTER_Y = IMG_Y + (400 * scale); // 440px
+
+      var PLANET_RADIUS = 58;
+      var EQUAL_ORBIT_RADIUS = 268;
+
+      // ======================================================================
+      // 24/7 ZERO-TRUST WEBSOCKET & ATOMIC REDIS ENGINE CLIENT
+      // ======================================================================
+      var urlParams = new URLSearchParams(window.location.search);
+      var currentUid = urlParams.get('uid') || '';
+      var currentSessionToken = urlParams.get('token') || '';
+      var gameWs = null;
+      var serverRoundId = 0;
+      var serverPhase = 'BETTING';
+      var serverTimeLeft = 15;
+      var serverPlanetPools = {};
+      var isSyncedWithServer = false;
+
+      function connectGameWebSocket() {
+        var statusEl = document.getElementById('loadingStatusText');
+        var overlayEl = document.getElementById('gameLoadingOverlay');
+
+        var protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        var host = window.location.host;
+        var wsUrl = protocol + '//' + host + '/ws/games/galaxy_star?uid=' + encodeURIComponent(currentUid) + '&token=' + encodeURIComponent(currentSessionToken);
+
+        if (statusEl) statusEl.textContent = 'Verifying Authenticated Vault...';
+
+        try {
+          gameWs = new WebSocket(wsUrl);
+
+          gameWs.onopen = function() {
+            if (statusEl) statusEl.textContent = 'Synchronizing Live 24/7 Round...';
+          };
+
+          gameWs.onmessage = function(event) {
+            try {
+              var data = JSON.parse(event.data);
+
+              if (data.event === 'INIT_SYNC') {
+                isSyncedWithServer = true;
+                serverRoundId = data.roundId;
+                serverPhase = data.phase;
+                serverTimeLeft = data.timeLeft;
+                serverPlanetPools = data.planetPools || {};
+
+                if (data.user && typeof data.user.coins === 'number') {
+                  userCoins = data.user.coins;
+                }
+
+                if (statusEl) statusEl.textContent = 'Connected! Entering Galaxy...';
+                setTimeout(function() {
+                  if (overlayEl) overlayEl.classList.add('fade-out');
+                }, 400);
+              }
+
+              if (data.event === 'TICK') {
+                serverRoundId = data.roundId;
+                serverPhase = data.phase;
+                serverTimeLeft = data.timeLeft;
+                serverPlanetPools = data.planetPools || {};
+              }
+
+              if (data.event === 'ROUND_LOCKED') {
+                serverPhase = 'LOCKED';
+                serverTimeLeft = data.timeLeft;
+                serverPlanetPools = data.planetPools || {};
+              }
+
+              if (data.event === 'ROUND_RESULT') {
+                serverPhase = 'RESULT';
+              }
+
+              if (data.event === 'BET_SUCCESS') {
+                if (typeof data.remainingCoins === 'number') {
+                  userCoins = data.remainingCoins;
+                }
+              }
+
+              if (data.event === 'BET_FAILED') {
+                alert('⚠️ Bet Failed: ' + (data.message || 'Error'));
+              }
+            } catch(e) {}
+          };
+
+          gameWs.onclose = function() {
+            setTimeout(connectGameWebSocket, 2500);
+          };
+          gameWs.onerror = function() {
+            setTimeout(function() {
+              if (overlayEl) overlayEl.classList.add('fade-out');
+            }, 2000);
+          };
+        } catch(err) {
+          setTimeout(function() {
+            if (overlayEl) overlayEl.classList.add('fade-out');
+          }, 2000);
+        }
+      }
+
+      connectGameWebSocket();
+
+      // Generate Persistent Cosmic Stars for Galaxy Background
+      var stars = [];
+      for (var i = 0; i < 180; i++) {
+        stars.push({
+          x: Math.random() * VIRTUAL_WIDTH,
+          y: Math.random() * VIRTUAL_HEIGHT,
+          radius: Math.random() * 1.4 + 0.35,
+          baseAlpha: Math.random() * 0.55 + 0.2,
+          twinkleSpeed: Math.random() * 2.5 + 1.2,
+          isBlue: Math.random() > 0.4
+        });
+      }
+
+      // 8 Planets with exact 100% equal distances (268px), 45-degree equidistant angles, multipliers and HD textures
+      var PLANET_CONFIGS = [
+        {
+          name: 'Mercury',
+          multiplier: '5X',
+          angleDeg: 270,
+          radius: PLANET_RADIUS,
+          baseColor: '#e2e8f0', rimColor: 'rgba(241, 245, 249, 0.95)',
+          haloColor: 'rgba(203, 213, 225, 0.45)',
+          haloStop: 'rgba(203, 213, 225, 0.22)',
+          spinSpeed: 0.02,
+          type: 'mercury'
+        },
+        {
+          name: 'Venus',
+          multiplier: '5X',
+          angleDeg: 315,
+          radius: PLANET_RADIUS,
+          baseColor: '#eab308', rimColor: 'rgba(254, 240, 138, 0.9)',
+          haloColor: 'rgba(234, 179, 8, 0.55)',
+          haloStop: 'rgba(234, 179, 8, 0.22)',
+          spinSpeed: 0.015,
+          type: 'venus'
+        },
+        {
+          name: 'Earth',
+          multiplier: '3X',
+          angleDeg: 0,
+          radius: PLANET_RADIUS,
+          baseColor: '#0284c7', rimColor: 'rgba(56, 189, 248, 0.9)',
+          haloColor: 'rgba(14, 165, 233, 0.55)',
+          haloStop: 'rgba(14, 165, 233, 0.22)',
+          spinSpeed: 0.025,
+          type: 'earth'
+        },
+        {
+          name: 'Mars',
+          multiplier: '5X',
+          angleDeg: 45,
+          radius: PLANET_RADIUS,
+          baseColor: '#dc2626', rimColor: 'rgba(248, 113, 113, 0.9)',
+          haloColor: 'rgba(239, 68, 68, 0.55)',
+          haloStop: 'rgba(239, 68, 68, 0.22)',
+          spinSpeed: 0.022,
+          type: 'mars'
+        },
+        {
+          name: 'Jupiter',
+          multiplier: '10X',
+          angleDeg: 90,
+          radius: PLANET_RADIUS,
+          baseColor: '#e879f9', rimColor: 'rgba(244, 114, 182, 0.95)',
+          haloColor: 'rgba(236, 72, 153, 0.55)',
+          haloStop: 'rgba(236, 72, 153, 0.22)',
+          spinSpeed: 0.035,
+          type: 'jupiter'
+        },
+        {
+          name: 'Neptune',
+          multiplier: '15X',
+          angleDeg: 135,
+          radius: PLANET_RADIUS,
+          baseColor: '#1d4ed8', rimColor: 'rgba(96, 165, 250, 0.95)',
+          haloColor: 'rgba(37, 99, 235, 0.7)',
+          haloStop: 'rgba(37, 99, 235, 0.22)',
+          spinSpeed: 0.02,
+          type: 'neptune'
+        },
+        {
+          name: 'Uranus',
+          multiplier: '25X',
+          angleDeg: 180,
+          radius: PLANET_RADIUS,
+          baseColor: '#38bdf8', rimColor: 'rgba(125, 211, 252, 0.95)',
+          haloColor: 'rgba(56, 189, 248, 0.65)',
+          haloStop: 'rgba(56, 189, 248, 0.22)',
+          spinSpeed: 0.018,
+          hasSubtleRing: true,
+          type: 'uranus'
+        },
+        {
+          name: 'Saturn',
+          multiplier: '50X',
+          angleDeg: 225,
+          radius: PLANET_RADIUS,
+          baseColor: '#f59e0b', rimColor: 'rgba(253, 230, 138, 0.95)',
+          haloColor: 'rgba(245, 158, 11, 0.65)',
+          haloStop: 'rgba(245, 158, 11, 0.22)',
+          spinSpeed: 0.03,
+          hasRing: true,
+          type: 'saturn'
+        }
+      ];
+
+      var PLANETS = PLANET_CONFIGS.map(function(cfg) {
+        var radAng = (cfg.angleDeg * Math.PI) / 180;
+        var exactX = CENTER_X + Math.cos(radAng) * EQUAL_ORBIT_RADIUS;
+        var exactY = CENTER_Y + Math.sin(radAng) * EQUAL_ORBIT_RADIUS;
+        return {
+          name: cfg.name,
+          multiplier: cfg.multiplier,
+          angleDeg: cfg.angleDeg,
+          radius: cfg.radius,
+          baseColor: cfg.baseColor,
+          rimColor: cfg.rimColor,
+          haloColor: cfg.haloColor,
+          haloStop: cfg.haloStop,
+          spinSpeed: cfg.spinSpeed,
+          type: cfg.type,
+          hasRing: cfg.hasRing,
+          hasSubtleRing: cfg.hasSubtleRing,
+          exactX: exactX,
+          exactY: exactY,
+          radAng: radAng,
+          dist: EQUAL_ORBIT_RADIUS
+        };
+      });
+
+      // 100% DETERMINISTIC PSEUDO-RANDOM SEEDED WINNER ALGORITHM (GLOBAL SYNCHRONIZED ACROSS ALL USERS)
+      function getSeededWinnerIndex(roundId) {
+        var safeRound = Math.floor(Math.abs(roundId));
+        var seed = (safeRound * 9301 + 49297) % 233280;
+        seed = (seed * 9301 + 49297) % 233280;
+        var roll = seed % 100; // 0 to 99
+
+        if (roll < 40) return 2;      // Earth (3X): 40% (0 to 39)
+        else if (roll < 50) return 0; // Mercury (5X): 10% (40 to 49)
+        else if (roll < 60) return 1; // Venus (5X): 10% (50 to 59)
+        else if (roll < 70) return 3; // Mars (5X): 10% (60 to 69)
+        else if (roll < 82) return 4; // Jupiter (10X): 12% (70 to 81)
+        else if (roll < 90) return 5; // Neptune (15X): 8% (82 to 89)
+        else if (roll < 97) return 6; // Uranus (25X): 7% (90 to 96)
+        else return 7;                // Saturn (50X): 3% (97 to 99)
+      }
+
+      // RARE MOON CRASH PROBABILITY TABLE (Total 100%):
+      // 92% Black Hole (Earth 3X), 4% 5X Crash, 2% Jupiter 10X Crash, 1% Neptune 15X Crash, 1% Saturn 50X Jackpot!
+      function getSeededMoonCrashBonus(roundId) {
+        var safeRound = Math.floor(Math.abs(roundId));
+        var seed = (safeRound * 1259 + 38711) % 10000;
+        var roll = seed % 100; // 0 to 99
+
+        if (roll < 92) {
+          return { isTriggered: false, targetIdx: 2 };
+        } else if (roll < 96) {
+          var fiveXOptions = [0, 1, 3];
+          var targetIdx = fiveXOptions[seed % fiveXOptions.length];
+          return { isTriggered: true, targetIdx: targetIdx };
+        } else if (roll < 98) {
+          return { isTriggered: true, targetIdx: 4 };
+        } else if (roll < 99) {
+          return { isTriggered: true, targetIdx: 5 };
+        } else {
+          return { isTriggered: true, targetIdx: 7 };
+        }
+      }
+
+      var planetBetsRef = { current: {} };
+      var userCoins = 10000;
+      if (window.AndroidGameBridge && typeof window.AndroidGameBridge.getUserCoins === 'function') {
+        userCoins = window.AndroidGameBridge.getUserCoins();
+      }
+      window.updateExternalUserCoins = function(newCoins) {
+        userCoins = newCoins;
+      };
+      var selectedChipIdx = 1;
+      var selectedChip = 100;
+      var lastClearedRound = -1;
+      var lastPayoutRound = -1;
+      var winnerHistory = [];
+      var time = Date.now() / 1000;
+
+      // Initialize winnerHistory with last 6 rounds using exact 42-second global cycle
+      var initRound = Math.floor(time / 42);
+      for (var h = 6; h >= 1; h--) {
+        var hRound = Math.max(0, initRound - h);
+        winnerHistory.push(getSeededWinnerIndex(hRound));
+      }
+
+      // DRAW ULTRA-DARK MIDNIGHT NAVY GALAXY BACKGROUND
+      function drawGalaxyBackground(animTime) {
+        var baseGrad = ctx.createLinearGradient(0, 0, 0, VIRTUAL_HEIGHT);
+        baseGrad.addColorStop(0, '#01040a');
+        baseGrad.addColorStop(0.3, '#020817');
+        baseGrad.addColorStop(0.5, '#010612');
+        baseGrad.addColorStop(0.7, '#020919');
+        baseGrad.addColorStop(1, '#000206');
+        ctx.fillStyle = baseGrad;
+        ctx.fillRect(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
+
+        var neb1 = ctx.createRadialGradient(220, 280, 40, 220, 280, 280);
+        neb1.addColorStop(0, 'rgba(8, 47, 73, 0.16)');
+        neb1.addColorStop(0.5, 'rgba(15, 23, 42, 0.12)');
+        neb1.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = neb1;
+        ctx.fillRect(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
+
+        var neb2 = ctx.createRadialGradient(480, 560, 50, 480, 560, 320);
+        neb2.addColorStop(0, 'rgba(12, 35, 90, 0.15)');
+        neb2.addColorStop(0.5, 'rgba(10, 15, 30, 0.10)');
+        neb2.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = neb2;
+        ctx.fillRect(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
+
+        stars.forEach(function(s) {
+          var twinkle = Math.sin(animTime * s.twinkleSpeed + s.x) * 0.35;
+          var currentAlpha = Math.max(0.08, Math.min(1, s.baseAlpha + twinkle));
+
+          ctx.fillStyle = s.isBlue
+            ? 'rgba(186, 230, 253, ' + (currentAlpha * 0.85) + ')'
+            : 'rgba(255, 255, 255, ' + currentAlpha + ')';
+
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+
+      // TRANSLUCENT GRAVITATIONAL BLACK HOLE (BLENDED WITH GALAXY BACKGROUND)
+      function drawBlackHole(cx, cy, animTime, activeWinnerIndex) {
+        ctx.save();
+        var bhRadius = 74;
+
+        var voidGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, bhRadius * 1.55);
+        voidGrad.addColorStop(0, 'rgba(1, 4, 12, 0.78)');
+        voidGrad.addColorStop(0.5, 'rgba(2, 8, 22, 0.50)');
+        voidGrad.addColorStop(0.8, 'rgba(3, 12, 30, 0.22)');
+        voidGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = voidGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, bhRadius * 1.55, 0, Math.PI * 2);
+        ctx.fill();
+
+        for (var s = 0; s < 6; s++) {
+          var baseAngle = animTime * 1.2 + (s * (Math.PI * 2 / 6));
+          ctx.save();
+          ctx.beginPath();
+          for (var t = 0; t <= 1; t += 0.05) {
+            var r = (bhRadius * 1.38) - (t * (bhRadius * 0.78));
+            var angle = baseAngle + (t * 1.6);
+            var px = cx + Math.cos(angle) * r;
+            var py = cy + Math.sin(angle) * r;
+            if (t === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.10)';
+          ctx.lineWidth = 2.4;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        var coreGrad = ctx.createRadialGradient(cx, cy, 0, cx, cy, bhRadius * 0.85);
+        coreGrad.addColorStop(0, 'rgba(0, 2, 8, 0.80)');
+        coreGrad.addColorStop(0.7, 'rgba(1, 5, 15, 0.48)');
+        coreGrad.addColorStop(1, 'rgba(2, 6, 20, 0)');
+        ctx.fillStyle = coreGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, bhRadius * 0.85, 0, Math.PI * 2);
+        ctx.fill();
+
+        // 4. PRECISE 42-SECOND GAME CYCLE:
+        // Phase 1: BETTING (0s - 22s) -> 22s
+        // Phase 2: ORBITING (22s - 36s) -> 14s
+        // Phase 3: SUCTION (36s - 37s) -> 1s
+        // Phase 4: WINNER (37s - 41s) -> 4s
+        // Phase 5: RESET (41s - 42s) -> 1s
+        var TOTAL_CYCLE = 42;
+        var cycleTime = animTime % TOTAL_CYCLE;
+        var roundNumber = Math.floor(animTime / TOTAL_CYCLE);
+        var winnerIndex = activeWinnerIndex !== undefined ? activeWinnerIndex : getSeededWinnerIndex(roundNumber);
+
+        var timerText = '';
+        var phaseLabel = '';
+        var isUrgent = false;
+
+        if (isSyncedWithServer) {
+          timerText = '' + Math.max(0, serverTimeLeft);
+          phaseLabel = serverPhase;
+          isUrgent = (serverPhase === 'BETTING' && serverTimeLeft <= 4);
+        } else if (cycleTime < 22) {
+          // Phase 1: BETTING (0s - 22s) -> 22 to 0 countdown
+          var secondsLeft = Math.max(0, Math.ceil(22 - cycleTime));
+          timerText = '' + secondsLeft;
+          phaseLabel = 'BETTING';
+          isUrgent = secondsLeft <= 4;
+        } else if (cycleTime < 36) {
+          // Phase 2: ORBITING (22s - 36s) -> 14 seconds (Action 0s to 14s)
+          var orbitElapsed = cycleTime - 22;
+          var secondsLeft = Math.max(0, Math.ceil(14 - orbitElapsed));
+          timerText = '' + secondsLeft;
+          phaseLabel = 'ORBITING';
+          isUrgent = secondsLeft <= 3;
+        } else if (cycleTime < 37) {
+          // Phase 3: SUCTION (36s - 37s) -> 1 second (Action 14s to 15s)
+          timerText = '1';
+          phaseLabel = 'SUCTION';
+          isUrgent = true;
+        } else if (cycleTime < 41) {
+          // Phase 4: WINNER (37s - 41s) -> 4 seconds (Action 15s to 19s)
+          var winnerElapsed = cycleTime - 37;
+          var secondsLeft = Math.max(0, Math.ceil(4 - winnerElapsed));
+          timerText = '' + secondsLeft;
+          phaseLabel = 'WINNER!';
+          isUrgent = false;
+        } else {
+          // Phase 5: RESET & RETURN (41s - 42s) -> 1 second (Action 19s to 20s)
+          timerText = '0';
+          phaseLabel = 'RESET';
+          isUrgent = false;
+        }
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = '900 34px system-ui, -apple-system, sans-serif';
+
+        ctx.shadowColor = (phaseLabel === 'WINNER!')
+          ? 'rgba(250, 204, 21, 0.95)'
+          : isUrgent
+            ? 'rgba(239, 68, 68, 0.95)'
+            : (cycleTime < 22)
+              ? 'rgba(56, 189, 248, 0.85)'
+              : 'rgba(234, 179, 8, 0.95)';
+        ctx.shadowBlur = 12;
+
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.95)';
+        ctx.lineWidth = 4.5;
+        ctx.strokeText(timerText, cx, cy - 6);
+
+        ctx.fillStyle = (phaseLabel === 'WINNER!')
+          ? '#fef08a'
+          : isUrgent
+            ? '#ef4444'
+            : (cycleTime < 22)
+              ? '#ffffff'
+              : '#fef08a';
+        ctx.fillText(timerText, cx, cy - 6);
+
+        ctx.font = '900 11px system-ui, -apple-system, sans-serif';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+        ctx.shadowBlur = 6;
+        ctx.strokeStyle = 'rgba(0, 0, 0, 0.92)';
+        ctx.lineWidth = 3.5;
+        ctx.strokeText(phaseLabel, cx, cy + 18);
+
+        ctx.fillStyle = (phaseLabel === 'WINNER!')
+          ? '#facc15'
+          : isUrgent
+            ? '#fca5a5'
+            : (cycleTime < 22)
+              ? '#38bdf8'
+              : '#eab308';
+        ctx.fillText(phaseLabel, cx, cy + 18);
+
+        ctx.restore();
+        ctx.restore();
+      }
+
+      function drawPlanet(p, cx, cy, rad, spinAngle, showText, customFontSize) {
+        if (showText === undefined) showText = true;
+        if (p.haloColor) {
+          ctx.save();
+          var haloGrad = ctx.createRadialGradient(cx, cy, rad * 0.75, cx, cy, rad * 1.55);
+          haloGrad.addColorStop(0, p.haloColor);
+          haloGrad.addColorStop(0.55, p.haloStop || 'rgba(0,0,0,0.22)');
+          haloGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          ctx.fillStyle = haloGrad;
+          ctx.beginPath();
+          ctx.arc(cx, cy, rad * 1.55, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        if (p.hasRing) {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(-0.32);
+
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * 1.95, rad * 0.52, 0, Math.PI, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(245, 158, 11, 0.75)';
+          ctx.lineWidth = 14;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * 1.62, rad * 0.44, 0, Math.PI, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(254, 240, 138, 0.95)';
+          ctx.lineWidth = 5;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * 1.35, rad * 0.36, 0, Math.PI, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(180, 83, 9, 0.85)';
+          ctx.lineWidth = 4;
+          ctx.stroke();
+
+          ctx.restore();
+        }
+
+        if (p.hasSubtleRing) {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(0.95);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * 1.52, rad * 0.28, 0, Math.PI, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(103, 232, 249, 0.85)';
+          ctx.lineWidth = 4.5;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.clip();
+
+        ctx.fillStyle = p.baseColor;
+        ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+        if (p.type === 'earth') {
+          var earthGrad = ctx.createRadialGradient(cx - rad * 0.2, cy - rad * 0.2, rad * 0.1, cx, cy, rad);
+          earthGrad.addColorStop(0, '#38bdf8');
+          earthGrad.addColorStop(0.6, '#0284c7');
+          earthGrad.addColorStop(1, '#034a75');
+          ctx.fillStyle = earthGrad;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+          ctx.fillStyle = '#22c55e';
+          for (var i = -1; i <= 2; i++) {
+            var shift = ((spinAngle * 22 + i * 48) % (rad * 2.8)) - rad * 1.4;
+            ctx.beginPath();
+            ctx.moveTo(cx + shift, cy - rad * 0.4);
+            ctx.bezierCurveTo(cx + shift + 22, cy - rad * 0.45, cx + shift + 28, cy - rad * 0.05, cx + shift + 18, cy + rad * 0.25);
+            ctx.bezierCurveTo(cx + shift + 10, cy + rad * 0.45, cx + shift - 12, cy + rad * 0.35, cx + shift - 8, cy - rad * 0.1);
+            ctx.closePath();
+            ctx.fill();
+
+            ctx.beginPath();
+            ctx.ellipse(cx + shift - 26, cy - rad * 0.2, rad * 0.22, rad * 0.45, -0.2, 0, Math.PI * 2);
+            ctx.ellipse(cx + shift - 20, cy + rad * 0.35, rad * 0.18, rad * 0.32, 0.2, 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+          for (var i = -1; i <= 2; i++) {
+            var cloudShift = ((spinAngle * 30 + i * 50) % (rad * 3.0)) - rad * 1.5;
+            ctx.beginPath();
+            ctx.ellipse(cx + cloudShift, cy - rad * 0.45, rad * 0.55, rad * 0.14, 0.1, 0, Math.PI * 2);
+            ctx.ellipse(cx + cloudShift + 12, cy + rad * 0.1, rad * 0.45, rad * 0.12, -0.15, 0, Math.PI * 2);
+            ctx.ellipse(cx + cloudShift - 10, cy + rad * 0.5, rad * 0.35, rad * 0.1, 0.05, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        } else if (p.type === 'jupiter') {
+          var jupBase = ctx.createLinearGradient(cx, cy - rad, cx, cy + rad);
+          jupBase.addColorStop(0, '#831843');
+          jupBase.addColorStop(0.25, '#be185d');
+          jupBase.addColorStop(0.5, '#f472b6');
+          jupBase.addColorStop(0.75, '#db2777');
+          jupBase.addColorStop(1, '#701a75');
+          ctx.fillStyle = jupBase;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+          var bands = [
+            { y: -0.75, h: 0.15, c: '#9d174d' },
+            { y: -0.52, h: 0.22, c: '#fbcfe8' },
+            { y: -0.25, h: 0.18, c: '#be185d' },
+            { y: -0.02, h: 0.25, c: '#fdf2f8' },
+            { y: 0.28, h: 0.20, c: '#e11d48' },
+            { y: 0.55, h: 0.24, c: '#f472b6' }
+          ];
+          bands.forEach(function(b) {
+            ctx.fillStyle = b.c;
+            ctx.fillRect(cx - rad, cy + rad * b.y, rad * 2, rad * b.h);
+          });
+
+          var spotX = cx + Math.sin(spinAngle * 1.2) * (rad * 0.55);
+          ctx.fillStyle = '#e11d48';
+          ctx.beginPath();
+          ctx.ellipse(spotX, cy + rad * 0.28, rad * 0.28, rad * 0.16, 0.05, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#fda4af';
+          ctx.beginPath();
+          ctx.ellipse(spotX, cy + rad * 0.28, rad * 0.16, rad * 0.09, 0.05, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (p.type === 'mars') {
+          var marsGrad = ctx.createRadialGradient(cx - rad * 0.25, cy - rad * 0.25, rad * 0.1, cx, cy, rad);
+          marsGrad.addColorStop(0, '#f87171');
+          marsGrad.addColorStop(0.45, '#dc2626');
+          marsGrad.addColorStop(0.85, '#991b1b');
+          marsGrad.addColorStop(1, '#450a0a');
+          ctx.fillStyle = marsGrad;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+          ctx.fillStyle = '#7f1d1d';
+          var marsShift = Math.sin(spinAngle * 1.8) * (rad * 0.35);
+          ctx.beginPath();
+          ctx.ellipse(cx + marsShift, cy + rad * 0.1, rad * 0.48, rad * 0.28, 0.1, 0, Math.PI * 2);
+          ctx.ellipse(cx - marsShift * 0.7, cy - rad * 0.2, rad * 0.38, rad * 0.22, -0.2, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(cx, cy - rad * 0.82, rad * 0.26, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (p.type === 'venus') {
+          var venGrad = ctx.createRadialGradient(cx - rad * 0.25, cy - rad * 0.25, rad * 0.1, cx, cy, rad);
+          venGrad.addColorStop(0, '#fef08a');
+          venGrad.addColorStop(0.4, '#eab308');
+          venGrad.addColorStop(0.8, '#ca8a04');
+          venGrad.addColorStop(1, '#713f12');
+          ctx.fillStyle = venGrad;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+          var vBands = [
+            { y: -0.65, h: 0.15, c: '#fef9c3' },
+            { y: -0.35, h: 0.24, c: '#fde047' },
+            { y: -0.05, h: 0.18, c: '#a16207' },
+            { y: 0.22, h: 0.26, c: '#fef08a' },
+            { y: 0.56, h: 0.20, c: '#854d0e' }
+          ];
+          vBands.forEach(function(b) {
+            ctx.fillStyle = b.c;
+            ctx.fillRect(cx - rad, cy + rad * b.y, rad * 2, rad * b.h);
+          });
+        } else if (p.type === 'saturn') {
+          var satGrad = ctx.createRadialGradient(cx - rad * 0.2, cy - rad * 0.2, rad * 0.1, cx, cy, rad);
+          satGrad.addColorStop(0, '#fef3c7');
+          satGrad.addColorStop(0.4, '#f59e0b');
+          satGrad.addColorStop(0.8, '#d97706');
+          satGrad.addColorStop(1, '#78350f');
+          ctx.fillStyle = satGrad;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+          var saturnBands = [
+            { y: -0.72, h: 0.15, c: '#92400e' },
+            { y: -0.52, h: 0.20, c: '#fde68a' },
+            { y: -0.28, h: 0.22, c: '#b45309' },
+            { y: -0.02, h: 0.25, c: '#fef3c7' },
+            { y: 0.28, h: 0.20, c: '#d97706' },
+            { y: 0.55, h: 0.22, c: '#78350f' }
+          ];
+          saturnBands.forEach(function(b) {
+            ctx.fillStyle = b.c;
+            ctx.fillRect(cx - rad, cy + rad * b.y, rad * 2, rad * b.h);
+          });
+        } else if (p.type === 'uranus') {
+          var uGrad = ctx.createRadialGradient(cx - rad * 0.25, cy - rad * 0.25, rad * 0.08, cx, cy, rad);
+          uGrad.addColorStop(0, '#bae6fd');
+          uGrad.addColorStop(0.35, '#38bdf8');
+          uGrad.addColorStop(0.75, '#0284c7');
+          uGrad.addColorStop(1, '#0c4a6e');
+          ctx.fillStyle = uGrad;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+          ctx.fillStyle = 'rgba(224, 242, 254, 0.45)';
+          ctx.beginPath();
+          ctx.ellipse(cx, cy, rad * 0.95, rad * 0.22, 0, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (p.type === 'neptune') {
+          var nGrad = ctx.createRadialGradient(cx - rad * 0.25, cy - rad * 0.25, rad * 0.08, cx, cy, rad);
+          nGrad.addColorStop(0, '#60a5fa');
+          nGrad.addColorStop(0.35, '#2563eb');
+          nGrad.addColorStop(0.7, '#1d4ed8');
+          nGrad.addColorStop(1, '#0f172a');
+          ctx.fillStyle = nGrad;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+          var neptuneBands = [
+            { y: -0.72, h: 0.14, c: '#1e3a8a' },
+            { y: -0.50, h: 0.18, c: '#3b82f6' },
+            { y: -0.25, h: 0.16, c: '#1d4ed8' },
+            { y: 0.02, h: 0.22, c: '#60a5fa' },
+            { y: 0.30, h: 0.18, c: '#1e40af' },
+            { y: 0.58, h: 0.20, c: '#172554' }
+          ];
+          neptuneBands.forEach(function(b) {
+            ctx.fillStyle = b.c;
+            ctx.fillRect(cx - rad, cy + rad * b.y, rad * 2, rad * b.h);
+          });
+
+          var darkSpotX = cx + Math.sin(spinAngle * 1.4) * (rad * 0.45);
+          ctx.fillStyle = '#090d16';
+          ctx.beginPath();
+          ctx.ellipse(darkSpotX, cy + rad * 0.12, rad * 0.32, rad * 0.16, -0.1, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.strokeStyle = 'rgba(147, 197, 253, 0.4)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.ellipse(darkSpotX, cy + rad * 0.12, rad * 0.36, rad * 0.20, -0.1, 0, Math.PI * 2);
+          ctx.stroke();
+        } else {
+          var mercGrad = ctx.createRadialGradient(cx - rad * 0.3, cy - rad * 0.3, rad * 0.08, cx, cy, rad);
+          mercGrad.addColorStop(0, '#f1f5f9');
+          mercGrad.addColorStop(0.35, '#cbd5e1');
+          mercGrad.addColorStop(0.7, '#64748b');
+          mercGrad.addColorStop(1, '#1e293b');
+          ctx.fillStyle = mercGrad;
+          ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+          ctx.fillStyle = 'rgba(30, 41, 59, 0.65)';
+          var craters = [
+            { x: -0.32, y: -0.25, r: 0.24 },
+            { x: 0.22, y: -0.38, r: 0.18 },
+            { x: 0.28, y: 0.22, r: 0.28 },
+            { x: -0.18, y: 0.32, r: 0.22 },
+            { x: -0.42, y: 0.08, r: 0.16 },
+            { x: 0.05, y: -0.05, r: 0.20 }
+          ];
+          craters.forEach(function(c) {
+            ctx.beginPath();
+            ctx.arc(cx + rad * c.x, cy + rad * c.y, rad * c.r, 0, Math.PI * 2);
+            ctx.fill();
+          });
+
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
+          ctx.beginPath();
+          ctx.arc(cx + rad * 0.15, cy - rad * 0.18, rad * 0.07, 0, Math.PI * 2);
+          ctx.arc(cx - rad * 0.25, cy + rad * 0.15, rad * 0.06, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+          ctx.lineWidth = 1.2;
+          ctx.beginPath();
+          var rx = cx + rad * 0.15, ry = cy - rad * 0.18;
+          for (var a = 0; a < 6; a++) {
+            var ang = a * (Math.PI / 3) + 0.2;
+            ctx.moveTo(rx, ry);
+            ctx.lineTo(rx + Math.cos(ang) * (rad * 0.28), ry + Math.sin(ang) * (rad * 0.28));
+          }
+          ctx.stroke();
+        }
+
+        var lightGrad = ctx.createRadialGradient(
+          cx - rad * 0.38, cy - rad * 0.38, rad * 0.05,
+          cx, cy, rad
+        );
+        lightGrad.addColorStop(0, 'rgba(255, 255, 255, 0.55)');
+        lightGrad.addColorStop(0.25, 'rgba(255, 255, 255, 0.08)');
+        lightGrad.addColorStop(0.65, 'rgba(0, 0, 0, 0.25)');
+        lightGrad.addColorStop(1, 'rgba(0, 0, 0, 0.88)');
+        ctx.fillStyle = lightGrad;
+        ctx.fillRect(cx - rad, cy - rad, rad * 2, rad * 2);
+
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+        ctx.strokeStyle = p.rimColor;
+        ctx.lineWidth = 2.0;
+        ctx.stroke();
+
+        if (p.hasRing) {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(-0.32);
+
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * 1.95, rad * 0.52, 0, 0, Math.PI);
+          ctx.strokeStyle = 'rgba(245, 158, 11, 0.85)';
+          ctx.lineWidth = 14;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * 1.62, rad * 0.44, 0, 0, Math.PI);
+          ctx.strokeStyle = 'rgba(254, 240, 138, 0.95)';
+          ctx.lineWidth = 5;
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * 1.35, rad * 0.36, 0, 0, Math.PI);
+          ctx.strokeStyle = 'rgba(180, 83, 9, 0.9)';
+          ctx.lineWidth = 4;
+          ctx.stroke();
+
+          ctx.restore();
+        }
+
+        if (p.hasSubtleRing) {
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(0.95);
+          ctx.beginPath();
+          ctx.ellipse(0, 0, rad * 1.52, rad * 0.28, 0, 0, Math.PI);
+          ctx.strokeStyle = 'rgba(103, 232, 249, 0.95)';
+          ctx.lineWidth = 4.5;
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        if (p.multiplier && showText) {
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          var fontSize = customFontSize || Math.max(8, Math.round(rad * 0.55));
+          ctx.font = '900 ' + fontSize + 'px system-ui, -apple-system, sans-serif';
+          
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+          ctx.shadowBlur = 6;
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 1;
+
+          ctx.strokeStyle = 'rgba(0, 0, 0, 0.95)';
+          ctx.lineWidth = Math.max(2, fontSize * 0.2);
+          ctx.strokeText(p.multiplier, cx, cy);
+
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(p.multiplier, cx, cy);
+          ctx.restore();
+        }
+
+        if (showText && rad > 25) {
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 12px system-ui, -apple-system, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+          ctx.shadowBlur = 4;
+          ctx.fillText(p.name.toUpperCase(), cx, cy + rad + 18);
+          ctx.shadowBlur = 0;
+        }
+      }
+
+      function getMoonOrbitState(earthCx, earthCy, animTime) {
+        var orbitRx = 88;
+        var orbitRy = 42;
+        var tiltAngle = -0.58;
+        var moonOrbitSpeed = 0.85;
+        var angle = -animTime * moonOrbitSpeed;
+
+        var rawX = Math.cos(angle) * orbitRx;
+        var rawY = Math.sin(angle) * orbitRy;
+
+        var cosT = Math.cos(tiltAngle);
+        var sinT = Math.sin(tiltAngle);
+        var rotatedX = rawX * cosT - rawY * sinT;
+        var rotatedY = rawX * sinT + rawY * cosT;
+
+        var mx = earthCx + rotatedX;
+        var my = earthCy + rotatedY;
+        var isBehind = rawY < 0;
+        var depthScale = isBehind ? 0.88 : 1.10;
+        var moonRadius = 14.5 * depthScale;
+
+        return { mx: mx, my: my, isBehind: isBehind, moonRadius: moonRadius, rawY: rawY };
+      }
+
+      function drawMoonSphere(state) {
+        var mx = state.mx;
+        var my = state.my;
+        var moonRadius = state.moonRadius;
+        var isBehind = state.isBehind;
+
+        ctx.save();
+
+        var glowAlpha = isBehind ? 0.22 : 0.45;
+        var mGlow = ctx.createRadialGradient(mx, my, moonRadius * 0.3, mx, my, moonRadius * 2.2);
+        mGlow.addColorStop(0, 'rgba(241, 245, 249, ' + glowAlpha + ')');
+        mGlow.addColorStop(1, 'rgba(241, 245, 249, 0)');
+        ctx.fillStyle = mGlow;
+        ctx.beginPath();
+        ctx.arc(mx, my, moonRadius * 2.2, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.beginPath();
+        ctx.arc(mx, my, moonRadius, 0, Math.PI * 2);
+        ctx.clip();
+
+        var moonGrad = ctx.createRadialGradient(mx - moonRadius * 0.3, my - moonRadius * 0.3, moonRadius * 0.1, mx, my, moonRadius);
+        moonGrad.addColorStop(0, '#ffffff');
+        moonGrad.addColorStop(0.4, '#cbd5e1');
+        moonGrad.addColorStop(0.8, isBehind ? '#475569' : '#64748b');
+        moonGrad.addColorStop(1, '#0f172a');
+        ctx.fillStyle = moonGrad;
+        ctx.fillRect(mx - moonRadius, my - moonRadius, moonRadius * 2, moonRadius * 2);
+
+        ctx.fillStyle = 'rgba(30, 41, 59, 0.55)';
+        ctx.beginPath();
+        ctx.arc(mx - moonRadius * 0.25, my - moonRadius * 0.2, moonRadius * 0.28, 0, Math.PI * 2);
+        ctx.arc(mx + moonRadius * 0.22, my + moonRadius * 0.15, moonRadius * 0.22, 0, Math.PI * 2);
+        ctx.arc(mx - moonRadius * 0.1, my + moonRadius * 0.32, moonRadius * 0.20, 0, Math.PI * 2);
+        ctx.fill();
+
+        var mLightGrad = ctx.createRadialGradient(mx - moonRadius * 0.35, my - moonRadius * 0.35, moonRadius * 0.05, mx, my, moonRadius);
+        mLightGrad.addColorStop(0, 'rgba(255, 255, 255, 0.55)');
+        mLightGrad.addColorStop(0.4, 'rgba(255, 255, 255, 0)');
+        mLightGrad.addColorStop(0.8, 'rgba(0, 0, 0, 0.45)');
+        mLightGrad.addColorStop(1, 'rgba(0, 0, 0, 0.90)');
+        ctx.fillStyle = mLightGrad;
+        ctx.fillRect(mx - moonRadius, my - moonRadius, moonRadius * 2, moonRadius * 2);
+
+        ctx.restore();
+
+        ctx.beginPath();
+        ctx.arc(mx, my, moonRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = isBehind ? 'rgba(203, 213, 225, 0.7)' : 'rgba(248, 250, 252, 0.95)';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+      }
+
+      function drawMiniPlanet(p, cx, cy, radius) {
+        drawPlanet(p, cx, cy, radius, 0, true, 8);
+      }
+
+      function drawCasinoChip(cx, cy, radius, valText, colorTheme, isSelected) {
+        ctx.save();
+
+        if (isSelected) {
+          ctx.save();
+          var sGlow = ctx.createRadialGradient(cx, cy, radius * 0.8, cx, cy, radius * 1.45);
+          sGlow.addColorStop(0, 'rgba(250, 204, 21, 0.9)');
+          sGlow.addColorStop(0.6, 'rgba(234, 179, 8, 0.4)');
+          sGlow.addColorStop(1, 'rgba(0, 0, 0, 0)');
+          ctx.fillStyle = sGlow;
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius * 1.45, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.85)';
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetY = 4;
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fillStyle = colorTheme;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+
+        var numStripes = 8;
+        for (var s = 0; s < numStripes; s++) {
+          var ang = s * (Math.PI * 2 / numStripes);
+          ctx.save();
+          ctx.translate(cx, cy);
+          ctx.rotate(ang);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(-radius * 0.12, -radius, radius * 0.24, radius * 0.22);
+          ctx.restore();
+        }
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.76, 0, Math.PI * 2);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2.2;
+        ctx.stroke();
+
+        ctx.save();
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.68, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+
+        var innerGrad = ctx.createRadialGradient(cx - radius * 0.2, cy - radius * 0.2, radius * 0.05, cx, cy, radius * 0.58);
+        innerGrad.addColorStop(0, '#ffffff');
+        innerGrad.addColorStop(0.7, '#f1f5f9');
+        innerGrad.addColorStop(1, '#cbd5e1');
+        ctx.fillStyle = innerGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius * 0.58, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = colorTheme;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        var glossGrad = ctx.createLinearGradient(cx - radius, cy - radius, cx + radius, cy + radius);
+        glossGrad.addColorStop(0, 'rgba(255, 255, 255, 0.45)');
+        glossGrad.addColorStop(0.45, 'rgba(255, 255, 255, 0)');
+        glossGrad.addColorStop(0.6, 'rgba(0, 0, 0, 0.12)');
+        glossGrad.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
+        ctx.fillStyle = glossGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = '900 16px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = '#0f172a';
+        ctx.shadowColor = 'rgba(255, 255, 255, 0.8)';
+        ctx.shadowBlur = 2;
+        ctx.fillText(valText, cx, cy + 0.5);
+        ctx.restore();
+
+        if (isSelected) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius + 2.5, 0, Math.PI * 2);
+          ctx.strokeStyle = '#facc15';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+
+        ctx.restore();
+      }
+
+      function drawBottomCasinoDeck(animTime) {
+        // 1. COINS DISPLAY (100% Transparent Background, Gold Coin Icon + Bold Balance)
+        var coinBoxX = 61;
+        var coinBoxY = 823;
+        var coinBoxH = 44;
+
+        ctx.save();
+        var iconX = coinBoxX + 16;
+        var iconY = coinBoxY + coinBoxH / 2;
+        var iconR = 14;
+
+        var goldGrad = ctx.createRadialGradient(iconX - iconR * 0.3, iconY - iconR * 0.3, iconR * 0.1, iconX, iconY, iconR);
+        goldGrad.addColorStop(0, '#fef08a');
+        goldGrad.addColorStop(0.5, '#eab308');
+        goldGrad.addColorStop(1, '#a16207');
+        ctx.fillStyle = goldGrad;
+        ctx.beginPath();
+        ctx.arc(iconX, iconY, iconR, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = '#ca8a04';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        ctx.font = '900 13px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = '#451a03';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('C', iconX, iconY);
+
+        ctx.font = '900 17px system-ui, -apple-system, sans-serif';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+        ctx.shadowBlur = 6;
+        ctx.fillText(userCoins.toLocaleString(), iconX + 22, iconY + 0.5);
+        ctx.restore();
+
+        // 2. RECENT WINNERS BAR (Translucent Glassmorphism Container with Exact Winning Planets)
+        var histBoxX = 210;
+        var histBoxY = 821;
+        var histBoxW = 408;
+        var histBoxH = 44;
+        var histRadius = 12;
+
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.6)';
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetY = 4;
+
+        var histGrad = ctx.createLinearGradient(histBoxX, histBoxY, histBoxX + histBoxW, histBoxY + histBoxH);
+        histGrad.addColorStop(0, 'rgba(15, 23, 42, 0.18)');
+        histGrad.addColorStop(0.5, 'rgba(46, 16, 101, 0.12)');
+        histGrad.addColorStop(1, 'rgba(15, 23, 42, 0.18)');
+        ctx.fillStyle = histGrad;
+
+        ctx.beginPath();
+        if (ctx.roundRect) {
+          ctx.roundRect(histBoxX, histBoxY, histBoxW, histBoxH, histRadius);
+        } else {
+          ctx.rect(histBoxX, histBoxY, histBoxW, histBoxH);
+        }
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.strokeStyle = 'rgba(99, 102, 241, 0.35)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        var slotSpacing = 70;
+        var startSlotX = histBoxX + (histBoxW - (5 * slotSpacing)) / 2;
+        var slotY = histBoxY + histBoxH / 2;
+
+        var displayHist = winnerHistory.slice(-6).reverse();
+        for (var s = 0; s < 6; s++) {
+          var slotX = startSlotX + (s * slotSpacing);
+          var planetIdx = (s < displayHist.length) ? displayHist[s] : 2;
+          var planet = PLANETS[planetIdx];
+
+          drawMiniPlanet(planet, slotX, slotY, 18);
+
+          if (s === 0) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(slotX, slotY, 21, 0, Math.PI * 2);
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 2.0;
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+        ctx.restore();
+
+        // 3. CASINO CHIPS ROW
+        var chips = (userCoins >= 100000) ? [
+          { label: '500', color: '#16a34a', val: 500 },
+          { label: '1K', color: '#9333ea', val: 1000 },
+          { label: '5K', color: '#eab308', val: 5000 },
+          { label: '10K', color: '#ec4899', val: 10000 },
+          { label: '50K', color: '#06b6d4', val: 50000 }
+        ] : [
+          { label: '10', color: '#dc2626', val: 10 },
+          { label: '100', color: '#2563eb', val: 100 },
+          { label: '500', color: '#16a34a', val: 500 },
+          { label: '1K', color: '#9333ea', val: 1000 },
+          { label: '5K', color: '#eab308', val: 5000 }
+        ];
+
+        var chipRadius = 35;
+        var chipAreaY = 932;
+        var chipSpacing = 108;
+        var startChipX = (VIRTUAL_WIDTH - ((chips.length - 1) * chipSpacing)) / 2;
+
+        for (var i = 0; i < chips.length; i++) {
+          var cx = startChipX + (i * chipSpacing);
+          var cy = chipAreaY;
+          var isSelected = (i === selectedChipIdx);
+          drawCasinoChip(cx, cy, chipRadius, chips[i].label, chips[i].color, isSelected);
+        }
+      }
+
+      function handleCanvasPointerDown(e) {
+        var rect = canvas.getBoundingClientRect();
+        var clientX = e.clientX;
+        var clientY = e.clientY;
+
+        var clickX = (clientX - rect.left) * (VIRTUAL_WIDTH / rect.width);
+        var clickY = (clientY - rect.top) * (VIRTUAL_HEIGHT / rect.height);
+
+        // 1. Check Chips Clicks
+        var chips = (userCoins >= 100000) ? [500, 1000, 5000, 10000, 50000] : [10, 100, 500, 1000, 5000];
+        var chipAreaY = 922;
+        var chipSpacing = 108;
+        var startChipX = (VIRTUAL_WIDTH - ((chips.length - 1) * chipSpacing)) / 2;
+
+        for (var i = 0; i < chips.length; i++) {
+          var cx = startChipX + (i * chipSpacing);
+          var dist = Math.hypot(clickX - cx, clickY - chipAreaY);
+          if (dist <= 40) {
+            selectedChipIdx = i;
+            selectedChip = chips[i];
+            return;
+          }
+        }
+
+        // 2. Check Planet Clicks for Betting (Server-Authoritative BETTING Phase)
+        var curLiveTime = getGlobalLiveTimeSeconds();
+        var curCycleTime = curLiveTime % 42;
+        var curRoundId = isSyncedWithServer ? serverRoundId : Math.floor(curLiveTime / 42);
+        var canPlaceBetPhase = isSyncedWithServer ? (serverPhase === 'BETTING') : (curCycleTime < 22);
+
+        if (canPlaceBetPhase) {
+          for (var pIdx = 0; pIdx < PLANETS.length; pIdx++) {
+            var p = PLANETS[pIdx];
+            var pDist = Math.hypot(clickX - p.exactX, clickY - p.exactY);
+            if (pDist <= p.radius + 18) {
+              if (userCoins < selectedChip) {
+                if (window.AndroidGameBridge && typeof window.AndroidGameBridge.openRechargeSheet === 'function') {
+                  window.AndroidGameBridge.openRechargeSheet();
+                } else {
+                  alert('⚠️ Insufficient coins! Please recharge to bet.');
+                }
+                return;
+              }
+
+              // ZERO-TRUST ATOMIC BET VIA WEBSOCKET
+              if (gameWs && gameWs.readyState === 1 && isSyncedWithServer) {
+                var txId = 'tx_' + (currentUid || 'anon') + '_' + serverRoundId + '_' + pIdx + '_' + Date.now();
+                gameWs.send(JSON.stringify({
+                  action: 'BET',
+                  planetId: pIdx,
+                  amount: selectedChip,
+                  txId: txId
+                }));
+                planetBetsRef.current[pIdx] = (planetBetsRef.current[pIdx] || 0) + selectedChip;
+                return;
+              }
+
+              // Fallback to Bridge / Local
+              var canBet = true;
+              if (window.AndroidGameBridge && typeof window.AndroidGameBridge.onPlacePlanetBet === 'function') {
+                canBet = window.AndroidGameBridge.onPlacePlanetBet(curRoundId, pIdx, selectedChip);
+              } else if (window.AndroidGameBridge && typeof window.AndroidGameBridge.onPlaceBet === 'function') {
+                canBet = window.AndroidGameBridge.onPlaceBet(selectedChip);
+              }
+
+              if (canBet) {
+                if (window.AndroidGameBridge && typeof window.AndroidGameBridge.getUserCoins === 'function') {
+                  userCoins = window.AndroidGameBridge.getUserCoins();
+                } else {
+                  userCoins -= selectedChip;
+                }
+                planetBetsRef.current[pIdx] = (planetBetsRef.current[pIdx] || 0) + selectedChip;
+              }
+              return;
+            }
+          }
+        } else {
+          // Clicked during locked/spinning phase
+          for (var pIdx = 0; pIdx < PLANETS.length; pIdx++) {
+            var p = PLANETS[pIdx];
+            var pDist = Math.hypot(clickX - p.exactX, clickY - p.exactY);
+            if (pDist <= p.radius + 18) {
+              alert('⏳ Round locked! Winner determination in progress...');
+              return;
+            }
+          }
+        }
+      }
+
+      canvas.addEventListener('pointerdown', handleCanvasPointerDown);
+
+      function getGlobalLiveTimeSeconds() {
+        if (window.AndroidGameBridge && typeof window.AndroidGameBridge.getServerTimeMillis === 'function') {
+          try {
+            var ms = window.AndroidGameBridge.getServerTimeMillis();
+            if (ms && ms > 0) return ms / 1000.0;
+          } catch(e) {}
+        }
+        return Date.now() / 1000.0;
+      }
+
+      var globalBaseEpoch = getGlobalLiveTimeSeconds();
+      var perfBase = performance.now() / 1000.0;
+
+      function getSyncedTimeSeconds() {
+        var nowPerf = performance.now() / 1000.0;
+        var elapsed = nowPerf - perfBase;
+        // Periodic check to avoid clock drift and stay in sync across devices
+        if (elapsed > 3.0 || elapsed < 0) {
+          globalBaseEpoch = getGlobalLiveTimeSeconds();
+          perfBase = nowPerf;
+          elapsed = 0;
+        }
+        return globalBaseEpoch + elapsed;
+      }
+
+      function render(now) {
+        time = getSyncedTimeSeconds();
+
+        // 1. DRAW GALAXY
+        drawGalaxyBackground(time);
+
+        // DRAW GAME TITLE: GALAXY STAR (NEAR TOP)
+        var drawGalaxyStarTitleHeader = function(animTime) {
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+
+          var titleX = 360;
+          var titleY = 49;
+
+          var pulse = 1 + Math.sin(animTime * 3) * 0.04;
+          ctx.shadowColor = '#000000';
+          ctx.shadowBlur = 12 * pulse;
+
+          ctx.font = '900 34px system-ui, -apple-system, sans-serif';
+          ctx.strokeStyle = '#000000';
+          ctx.lineWidth = 3.5;
+          ctx.strokeText('Galaxy Star', titleX, titleY);
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText('Galaxy Star', titleX, titleY);
+
+          ctx.restore();
+        };
+
+        drawGalaxyStarTitleHeader(time);
+
+        // 3. FIVE-PHASE 42-SECOND PLANET POSITION & WINNER MECHANISM (GLOBAL SYNCHRONIZED)
+        var TOTAL_CYCLE = 42;
+        var cycleTime = time % TOTAL_CYCLE;
+        var roundNumber = Math.floor(time / TOTAL_CYCLE);
+
+        if (cycleTime < 22 && lastClearedRound !== roundNumber) {
+          lastClearedRound = roundNumber;
+          var prevWinner = getSeededWinnerIndex(roundNumber - 1);
+          if (winnerHistory.length === 0 || winnerHistory[winnerHistory.length - 1] !== prevWinner) {
+            winnerHistory.push(prevWinner);
+            if (winnerHistory.length > 12) winnerHistory.shift();
+          }
+          planetBetsRef.current = {};
+        }
+
+        var winnerIndex = getSeededWinnerIndex(roundNumber);
+        var winnerPlanet = PLANETS[winnerIndex] || PLANETS[2];
+
+        // 2. DRAW BLACK HOLE & TIMER (PASSING UNIFIED WINNER INDEX)
+        drawBlackHole(CENTER_X, CENTER_Y, time, winnerIndex);
+
+        if (cycleTime >= 37 && lastPayoutRound !== roundNumber) {
+          lastPayoutRound = roundNumber;
+          // Claim verified reward from authoritative Kotlin/Server backend
+          if (window.AndroidGameBridge && typeof window.AndroidGameBridge.onClaimRoundReward === 'function') {
+            window.AndroidGameBridge.onClaimRoundReward(roundNumber);
+            setTimeout(function() {
+              if (window.AndroidGameBridge && typeof window.AndroidGameBridge.getUserCoins === 'function') {
+                userCoins = window.AndroidGameBridge.getUserCoins();
+              }
+            }, 300);
+          } else {
+            var winIdx = winnerIndex;
+            var betAmt = planetBetsRef.current[winIdx] || 0;
+            if (betAmt > 0) {
+              var multVal = parseInt(PLANETS[winIdx].multiplier.replace('X', ''), 10) || 3;
+              var crashInfo = getSeededMoonCrashBonus(roundNumber);
+              if (PLANETS[winIdx].type === 'earth' && crashInfo.isTriggered) {
+                var targetMult = parseInt(PLANETS[crashInfo.targetIdx].multiplier.replace('X', ''), 10) || 5;
+                multVal = 3 * targetMult;
+              }
+              userCoins += (betAmt * multVal);
+            }
+          }
+        }
+
+        function calcOrbitAngle(t) {
+          var progress = Math.max(0, Math.min(1, t / 14));
+          var baseMotion = t * 4.2;
+          var accelerationBonus = (progress * progress * 8.0 + Math.pow(progress, 3) * 12.0);
+          return baseMotion + accelerationBonus;
+        }
+
+        var maxOrbitAngle = calcOrbitAngle(14);
+        var exitVelocity = 5.2;
+
+        var isOrbiting = cycleTime >= 22 && cycleTime < 36;
+        var isSuction = cycleTime >= 36 && cycleTime < 37;
+        var isWinnerPhase = cycleTime >= 37 && cycleTime < 41;
+        var isReturnPhase = cycleTime >= 41;
+
+        var orbitElapsed = isOrbiting ? cycleTime - 22 : (cycleTime >= 36 ? 14 : 0);
+        var orbitAngleOffset = isOrbiting
+          ? calcOrbitAngle(orbitElapsed)
+          : (cycleTime >= 36 ? maxOrbitAngle : 0);
+
+        var currentPlanetPositions = [];
+        for (var i = 0; i < PLANETS.length; i++) {
+          var p = PLANETS[i];
+          var defaultCx = p.exactX;
+          var defaultCy = p.exactY;
+          var isThisWinner = (i === winnerIndex);
+
+          var dist = p.dist;
+          var baseAngle = p.radAng;
+
+          var frozenOrbitAngle = baseAngle + maxOrbitAngle;
+          var frozenOrbitX = CENTER_X + Math.cos(frozenOrbitAngle) * dist;
+          var frozenOrbitY = CENTER_Y + Math.sin(frozenOrbitAngle) * dist;
+
+          if (cycleTime < 22) {
+            // PHASE 1: BETTING (0s - 22s)
+            currentPlanetPositions.push({
+              planet: p,
+              cx: defaultCx,
+              cy: defaultCy,
+              radius: p.radius,
+              opacity: 1,
+              isWinningHighlight: false
+            });
+          } else if (cycleTime < 36) {
+            // PHASE 2: ORBITING (22s - 36s)
+            var orbitElapsed = cycleTime - 22;
+            var curAngle = baseAngle + calcOrbitAngle(orbitElapsed);
+            var curCx = CENTER_X + Math.cos(curAngle) * dist;
+            var curCy = CENTER_Y + Math.sin(curAngle) * dist;
+            currentPlanetPositions.push({
+              planet: p,
+              cx: curCx,
+              cy: curCy,
+              radius: p.radius,
+              opacity: 1,
+              isWinningHighlight: false
+            });
+          } else {
+            // PHASES 3, 4 & 5 (36s - 42s) -> 6 Seconds Post-Orbit Action
+            var postElapsed = cycleTime - 36;
+            var postProgress = postElapsed / 6;
+
+            if (isThisWinner) {
+              var frozenOrbitAngle = baseAngle + maxOrbitAngle;
+              if (cycleTime < 37) {
+                var suctionProg = cycleTime - 36;
+                var spiralAngle = frozenOrbitAngle + (exitVelocity * suctionProg * 0.95);
+                var smoothDistProg = suctionProg * suctionProg * (3 - 2 * suctionProg);
+                var curDist = dist * (1 - smoothDistProg);
+                var sX = CENTER_X + Math.cos(spiralAngle) * curDist;
+                var sY = CENTER_Y + Math.sin(spiralAngle) * curDist;
+                var curR = Math.max(12, p.radius * (1 - suctionProg * 0.65));
+                currentPlanetPositions.push({
+                  planet: p,
+                  cx: sX,
+                  cy: sY,
+                  radius: curR,
+                  opacity: 1 - suctionProg * 0.35,
+                  isWinningHighlight: false
+                });
+              } else if (cycleTime < 41) {
+                var winnerElapsed = cycleTime - 37;
+                var winnerProg = winnerElapsed / 4;
+                if (winnerProg < 0.25) {
+                  var emergeProg = winnerProg / 0.25;
+                  var easeOut = emergeProg * emergeProg * (3 - 2 * emergeProg);
+                  var outR = 14 + (p.radius * 1.35 - 14) * easeOut;
+                  currentPlanetPositions.push({
+                    planet: p,
+                    cx: CENTER_X,
+                    cy: CENTER_Y,
+                    radius: outR,
+                    opacity: 0.4 + easeOut * 0.6,
+                    isWinningHighlight: true
+                  });
+                } else {
+                  var pulse = 1 + Math.sin(time * 5) * 0.06;
+                  currentPlanetPositions.push({
+                    planet: p,
+                    cx: CENTER_X,
+                    cy: CENTER_Y,
+                    radius: p.radius * 1.35 * pulse,
+                    opacity: 1,
+                    isWinningHighlight: true
+                  });
+                }
+              } else {
+                var returnElapsed = cycleTime - 41;
+                var easeReturn = returnElapsed * returnElapsed * (3 - 2 * returnElapsed);
+                var rX = CENTER_X + (defaultCx - CENTER_X) * easeReturn;
+                var rY = CENTER_Y + (defaultCy - CENTER_Y) * easeReturn;
+                var rRadius = (p.radius * 1.35) + (p.radius - p.radius * 1.35) * easeReturn;
+                currentPlanetPositions.push({
+                  planet: p,
+                  cx: rX,
+                  cy: rY,
+                  radius: rRadius,
+                  opacity: 1,
+                  isWinningHighlight: returnElapsed < 0.5
+                });
+              }
+            } else {
+              // NON-WINNERS: CONTINUOUS ORBIT GLIDE TO HOME (100% SMOOTH)
+              var frozenOrbitAngle = baseAngle + maxOrbitAngle;
+              var totalRotations = Math.ceil((frozenOrbitAngle - baseAngle) / (Math.PI * 2));
+              var targetAngle = baseAngle + (totalRotations + 0.5) * Math.PI * 2;
+              var finalHomeAngle = baseAngle + (Math.round((targetAngle - baseAngle) / (Math.PI * 2))) * Math.PI * 2;
+
+              var easeGlide = 1 - Math.pow(1 - postProgress, 2.5);
+              var curAngle = frozenOrbitAngle + (finalHomeAngle - frozenOrbitAngle) * easeGlide;
+              var curCx = CENTER_X + Math.cos(curAngle) * dist;
+              var curCy = CENTER_Y + Math.sin(curAngle) * dist;
+
+              currentPlanetPositions.push({
+                planet: p,
+                cx: curCx,
+                cy: curCy,
+                radius: p.radius,
+                opacity: 1,
+                isWinningHighlight: false
+              });
+            }
+          }
+        }
+
+        // 4. PREPARE MOON & PLANET RENDERING WITH 3D DEPTH
+        var earthX = 0;
+        var earthY = 0;
+        var foundEarth = false;
+
+        for (var i = 0; i < currentPlanetPositions.length; i++) {
+          var item = currentPlanetPositions[i];
+          if (item.planet.type === 'earth') {
+            earthX = item.cx;
+            earthY = item.cy;
+            foundEarth = true;
+            break;
+          }
+        }
+
+        var crashInfo = getSeededMoonCrashBonus(roundNumber);
+        var isEarthWinner = (winnerPlanet && winnerPlanet.type === 'earth');
+        var isCrashActive = isEarthWinner && crashInfo.isTriggered && cycleTime >= 36 && cycleTime < 41;
+
+        var moonState = foundEarth ? getMoonOrbitState(earthX, earthY, time) : null;
+
+        // 4a. IF MOON IS BEHIND EARTH (Normal orbit): DRAW MOON BEHIND EARTH
+        if (!isCrashActive && foundEarth && moonState && moonState.isBehind) {
+          drawMoonSphere(moonState);
+        }
+
+        // 4b. DRAW 8 SURROUNDING CRISP HD ANIMATED PLANETS (INCLUDING EARTH)
+        var sortedPositions = currentPlanetPositions.slice().sort(function(a, b) {
+          if (a.isWinningHighlight) return 1;
+          if (b.isWinningHighlight) return -1;
+          return 0;
+        });
+
+        for (var i = 0; i < sortedPositions.length; i++) {
+          var item = sortedPositions[i];
+          var p = item.planet;
+          var baseCx = item.cx;
+          var baseCy = item.cy;
+          var radius = item.radius;
+          var spinAngle = time * p.spinSpeed * 10;
+
+          ctx.save();
+          if (item.opacity < 1) {
+            ctx.globalAlpha = item.opacity;
+          }
+
+          if (item.isWinningHighlight) {
+            ctx.save();
+            var winGlow = ctx.createRadialGradient(baseCx, baseCy, radius * 0.5, baseCx, baseCy, radius * 2.2);
+            winGlow.addColorStop(0, 'rgba(250, 204, 21, 0.75)');
+            winGlow.addColorStop(0.5, 'rgba(234, 179, 8, 0.35)');
+            winGlow.addColorStop(1, 'rgba(234, 179, 8, 0)');
+            ctx.fillStyle = winGlow;
+            ctx.beginPath();
+            ctx.arc(baseCx, baseCy, radius * 2.2, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            var labelY = baseCy - radius - 32;
+
+            ctx.shadowColor = 'transparent';
+            ctx.shadowBlur = 0;
+            ctx.font = '900 28px system-ui, -apple-system, sans-serif';
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 4;
+            var winText = 'WINNER';
+            ctx.strokeText(winText, baseCx, labelY);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(winText, baseCx, labelY);
+
+            ctx.restore();
+          }
+
+          drawPlanet(p, baseCx, baseCy, radius, spinAngle);
+
+          // Draw Bet Badge on Planet if user placed bet on this planet
+          var planetIdxInList = PLANETS.indexOf(p);
+          var currentBetOnPlanet = planetBetsRef.current[planetIdxInList] || 0;
+          if (currentBetOnPlanet > 0) {
+            ctx.save();
+            var badgeX = baseCx + radius * 0.55;
+            var badgeY = baseCy - radius * 0.55;
+
+            ctx.beginPath();
+            ctx.arc(badgeX, badgeY, 13, 0, Math.PI * 2);
+            ctx.fillStyle = '#16a34a';
+            ctx.fill();
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 1.8;
+            ctx.stroke();
+
+            ctx.font = '900 10px system-ui, -apple-system, sans-serif';
+            ctx.fillStyle = '#ffffff';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            var betLabel = currentBetOnPlanet >= 1000 ? (currentBetOnPlanet / 1000).toFixed(1) + 'k' : '' + currentBetOnPlanet;
+            ctx.fillText(betLabel, badgeX, badgeY);
+            ctx.restore();
+          }
+
+          ctx.restore();
+        }
+
+        // 4c. IF MOON IS IN FRONT OF EARTH (Normal orbit): DRAW MOON OVER EARTH
+        if (!isCrashActive && foundEarth && moonState && !moonState.isBehind) {
+          drawMoonSphere(moonState);
+        }
+
+        // 4d. SPECIAL MOON COSMIC CRASH SEQUENCE & EXPLOSION
+        if (isCrashActive) {
+          var targetP = PLANETS[crashInfo.targetIdx];
+          var targetX = targetP.exactX;
+          var targetY = targetP.exactY;
+          var targetMult = parseInt(targetP.multiplier.replace('X', ''), 10) || 5;
+          var totalMult = 3 * targetMult;
+
+          if (cycleTime >= 36 && cycleTime < 37) {
+            var crashProg = cycleTime - 36;
+            var mx = earthX + (targetX - earthX) * crashProg;
+            var my = earthY + (targetY - earthY) * crashProg;
+
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(earthX, earthY);
+            ctx.lineTo(mx, my);
+            ctx.strokeStyle = 'rgba(249, 115, 22, 0.88)';
+            ctx.lineWidth = 7;
+            ctx.shadowColor = '#facc15';
+            ctx.shadowBlur = 14;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(earthX, earthY);
+            ctx.lineTo(mx, my);
+            ctx.strokeStyle = '#fef08a';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            ctx.restore();
+
+            drawMoonSphere({ mx: mx, my: my, moonRadius: 10, isBehind: false, rawY: my });
+          } else if (cycleTime >= 37 && cycleTime < 41) {
+            var expProg = (cycleTime - 37) / 4;
+
+            ctx.save();
+            var flashRadius = 25 + expProg * 85;
+            var flashGrad = ctx.createRadialGradient(targetX, targetY, 0, targetX, targetY, flashRadius);
+            flashGrad.addColorStop(0, 'rgba(255, 255, 255, 0.98)');
+            flashGrad.addColorStop(0.3, 'rgba(250, 204, 21, 0.88)');
+            flashGrad.addColorStop(0.65, 'rgba(239, 68, 68, 0.65)');
+            flashGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            ctx.fillStyle = flashGrad;
+            ctx.beginPath();
+            ctx.arc(targetX, targetY, flashRadius, 0, Math.PI * 2);
+            ctx.fill();
+
+            var ringRadius = expProg * 125;
+            ctx.beginPath();
+            ctx.arc(targetX, targetY, ringRadius, 0, Math.PI * 2);
+            ctx.strokeStyle = 'rgba(250, 204, 21, ' + Math.max(0, 1 - expProg) + ')';
+            ctx.lineWidth = 4.5;
+            ctx.stroke();
+
+            for (var pIdx = 0; pIdx < 16; pIdx++) {
+              var angle = (pIdx * (Math.PI * 2 / 16)) + (time * 2.5);
+              var pDist = expProg * 110 * (0.75 + (pIdx % 4) * 0.15);
+              var px = targetX + Math.cos(angle) * pDist;
+              var py = targetY + Math.sin(angle) * pDist;
+              var pSize = Math.max(1, 6.5 * (1 - expProg));
+
+              ctx.fillStyle = pIdx % 2 === 0 ? '#fef08a' : '#f97316';
+              ctx.beginPath();
+              ctx.arc(px, py, pSize, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = '900 13px system-ui, -apple-system, sans-serif';
+            ctx.shadowColor = 'rgba(239, 68, 68, 0.95)';
+            ctx.shadowBlur = 12;
+            ctx.strokeStyle = 'rgba(0, 0, 0, 0.95)';
+            ctx.lineWidth = 4;
+            ctx.strokeText('💥 MOON CRASH! ' + totalMult + 'X BONUS', targetX, targetY - 48);
+            ctx.fillStyle = '#fef08a';
+            ctx.fillText('💥 MOON CRASH! ' + totalMult + 'X BONUS', targetX, targetY - 48);
+            ctx.restore();
+
+            ctx.restore();
+          }
+        }
+
+        // 4e. MOON LAND JACKPOT & FLYING MULTIPLIED COINS ANIMATION
+        function drawMoonLandJackpotAndFlyingCoins() {
+          if (cycleTime >= 37 && cycleTime < 41) {
+            var winP = PLANETS[winnerIndex];
+            var isCrash = isCrashActive || (winP.type === 'earth' && crashInfo.isTriggered);
+
+            var totalMult = parseInt(winP.multiplier.replace('X', ''), 10) || 3;
+            if (isCrash) {
+              var targetP = PLANETS[crashInfo.targetIdx];
+              var targetMult = parseInt(targetP.multiplier.replace('X', ''), 10) || 5;
+              totalMult = 3 * targetMult;
+            }
+
+            var winAmount = (planetBetsRef.current[winnerIndex] || 0) * totalMult;
+            var bannerY = isCrash ? 220 : 250;
+
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            if (isCrash) {
+              // 🌕 MOON LAND JACKPOT SPECIAL BANNER
+              ctx.shadowColor = '#facc15';
+              ctx.shadowBlur = 22;
+
+              var pulse = 1 + Math.sin(time * 8) * 0.05;
+              ctx.fillStyle = 'rgba(234, 179, 8, 0.28)';
+              ctx.strokeStyle = '#facc15';
+              ctx.lineWidth = 2.5;
+              ctx.beginPath();
+              if (ctx.roundRect) ctx.roundRect(CENTER_X - 185 * pulse, bannerY - 32, 370 * pulse, 64, 16);
+              else ctx.rect(CENTER_X - 185 * pulse, bannerY - 32, 370 * pulse, 64);
+              ctx.fill();
+              ctx.stroke();
+
+              ctx.font = '900 21px system-ui, -apple-system, sans-serif';
+              ctx.strokeStyle = '#000000';
+              ctx.lineWidth = 4.5;
+              ctx.strokeText('🌕 MOON LAND JACKPOT! 🌕', CENTER_X, bannerY - 10);
+              ctx.fillStyle = '#fef08a';
+              ctx.fillText('🌕 MOON LAND JACKPOT! 🌕', CENTER_X, bannerY - 10);
+
+              ctx.font = '900 16px system-ui, -apple-system, sans-serif';
+              ctx.strokeText('💥 ' + totalMult + 'X MULTIPLIER BONUS 💥', CENTER_X, bannerY + 14);
+              ctx.fillStyle = '#f97316';
+              ctx.fillText('💥 ' + totalMult + 'X MULTIPLIER BONUS 💥', CENTER_X, bannerY + 14);
+            }
+
+            // FLYING GOLDEN COINS BURST & WIN OVERLAY
+            if (winAmount > 0) {
+              var winElapsed = cycleTime - 37; // 0 to 4s
+              var startX = CENTER_X;
+              var startY = CENTER_Y;
+              var targetX = 80;
+              var targetY = 845;
+
+              for (var c = 0; c < 18; c++) {
+                var delay = (c % 6) * 0.12;
+                var curCProg = Math.max(0, Math.min(1, (winElapsed - delay) / 1.5));
+                if (curCProg > 0 && curCProg < 1) {
+                  var spreadX = Math.sin(c * 1.5) * 120 * (1 - curCProg);
+                  var spreadY = Math.cos(c * 1.5) * 80 * (1 - curCProg);
+                  var cx = startX + (targetX - startX) * curCProg + spreadX;
+                  var cy = startY + (targetY - startY) * curCProg + spreadY;
+
+                  ctx.beginPath();
+                  ctx.arc(cx, cy, 10, 0, Math.PI * 2);
+                  ctx.fillStyle = '#eab308';
+                  ctx.fill();
+                  ctx.strokeStyle = '#fef08a';
+                  ctx.lineWidth = 2;
+                  ctx.stroke();
+
+                  ctx.font = '900 9px system-ui, sans-serif';
+                  ctx.fillStyle = '#713f12';
+                  ctx.fillText('$', cx, cy);
+                }
+              }
+
+              // Big Screen Win Pop-up Text
+              ctx.save();
+              ctx.shadowColor = '#10b981';
+              ctx.shadowBlur = 22;
+
+              var popY = 320;
+              ctx.font = '900 24px system-ui, -apple-system, sans-serif';
+              ctx.strokeStyle = '#000000';
+              ctx.lineWidth = 5;
+              var winText = '💰 +$' + winAmount.toLocaleString() + (isCrash ? ' (MOON LAND JACKPOT WIN!)' : ' WIN!');
+              ctx.strokeText(winText, CENTER_X, popY);
+              ctx.fillStyle = '#34d399';
+              ctx.fillText(winText, CENTER_X, popY);
+              ctx.restore();
+            }
+
+            ctx.restore();
+          }
+        }
+
+        drawMoonLandJackpotAndFlyingCoins();
+
+        // 5. DRAW COMPLETE CASINO DECK: COINS BADGE, 6-PLANET WINNER HISTORY BAR & 5 CASINO CHIPS
+        drawBottomCasinoDeck(time);
+
+        // 5b. OFFLINE GUARD BANNER
+        var isOnlineNow = true;
+        if (window.AndroidGameBridge && typeof window.AndroidGameBridge.isNetworkOnline === 'function') {
+          isOnlineNow = window.AndroidGameBridge.isNetworkOnline();
+        } else {
+          isOnlineNow = (navigator.onLine !== false);
+        }
+
+        if (!isOnlineNow) {
+          ctx.save();
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.90)';
+          ctx.fillRect(0, 0, VIRTUAL_WIDTH, VIRTUAL_HEIGHT);
+
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = '#ef4444';
+          ctx.font = '900 22px system-ui, sans-serif';
+          ctx.fillText('⚠️ NO INTERNET CONNECTION', CENTER_X, CENTER_Y - 20);
+
+          ctx.fillStyle = '#cbd5e1';
+          ctx.font = '600 14px system-ui, sans-serif';
+          ctx.fillText('Live game is paused. Reconnecting...', CENTER_X, CENTER_Y + 16);
+          ctx.restore();
+        }
+
+        // 6. UPDATE HTML WINNER POPUP OVERLAY (SYNCHRONIZED WITH REACT COMPONENT)
+        var winnerPopupEl = document.getElementById('winnerPopup');
+        if (winnerPopupEl) {
+          var isWinnerShow = (cycleTime >= 37 && cycleTime < 41);
+          if (isWinnerShow) {
+            winnerPopupEl.classList.remove('hidden');
+
+            var winP = PLANETS[winnerIndex] || PLANETS[2];
+            var isCrash = (winP.type === 'earth' && getSeededMoonCrashBonus(roundNumber).isTriggered);
+            var totalMult = parseInt(winP.multiplier.replace('X', ''), 10) || 3;
+            if (isCrash) {
+              var crashInfo = getSeededMoonCrashBonus(roundNumber);
+              var targetP = PLANETS[crashInfo.targetIdx];
+              var targetMult = parseInt(targetP.multiplier.replace('X', ''), 10) || 5;
+              totalMult = 3 * targetMult;
+            }
+            var userBet = planetBetsRef.current[winnerIndex] || 0;
+            var userWon = userBet * totalMult;
+
+            var names1 = ['GalaxyKing', 'Aarav_Star', 'CosmicAce', 'NovaRider', 'AstroKnight'];
+            var names2 = ['CosmicKing', 'OrbitMaster', 'NebulaPro', 'StarLord', 'Zenith'];
+            var names3 = ['Starlight', 'PlanetHunter', 'AstroQueen', 'SolarFlare', 'Comet99'];
+
+            var idx1 = (roundNumber * 7) % names1.length;
+            var idx2 = (roundNumber * 13) % names2.length;
+            var idx3 = (roundNumber * 19) % names3.length;
+
+            var baseWin = totalMult * 35000 + ((roundNumber * 54321) % 200000);
+            var win1 = userWon > 0 ? userWon : baseWin;
+            var win2 = Math.floor(baseWin * 0.65);
+            var win3 = Math.floor(baseWin * 0.35);
+
+            var pEl = document.getElementById('winnerPriceVal');
+            var wEl = document.getElementById('winnerWagerVal');
+            if (pEl) pEl.textContent = userBet > 0 ? '+' + userBet.toLocaleString() : '0';
+            if (wEl) wEl.textContent = userWon.toLocaleString();
+
+            var realUserName = 'You';
+            var realUserAvatar = '';
+            if (window.AndroidGameBridge) {
+              if (typeof window.AndroidGameBridge.getUserName === 'function') {
+                realUserName = window.AndroidGameBridge.getUserName();
+              }
+              if (typeof window.AndroidGameBridge.getUserAvatar === 'function') {
+                realUserAvatar = window.AndroidGameBridge.getUserAvatar();
+              }
+            }
+
+            // 1st place
+            var n1El = document.getElementById('winnerName1');
+            var a1El = document.getElementById('winnerAmt1');
+            var av1El = document.getElementById('winnerAvatar1');
+            var ph1El = document.getElementById('winnerPlaceholder1');
+            if (n1El) n1El.textContent = userWon > 0 ? realUserName : names1[idx1];
+            if (a1El) a1El.textContent = '+' + win1.toLocaleString();
+            if (av1El) {
+              av1El.src = realUserAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80';
+              av1El.style.display = 'block';
+              if (ph1El) ph1El.style.display = 'none';
+            }
+
+            // 2nd place
+            var n2El = document.getElementById('winnerName2');
+            var a2El = document.getElementById('winnerAmt2');
+            var av2El = document.getElementById('winnerAvatar2');
+            var ph2El = document.getElementById('winnerPlaceholder2');
+            if (n2El) n2El.textContent = names2[idx2];
+            if (a2El) a2El.textContent = win2.toLocaleString();
+            if (av2El) {
+              av2El.src = 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80';
+              av2El.style.display = 'block';
+            }
+            if (ph2El) ph2El.style.display = 'none';
+
+            // 3rd place
+            var n3El = document.getElementById('winnerName3');
+            var a3El = document.getElementById('winnerAmt3');
+            var av3El = document.getElementById('winnerAvatar3');
+            var ph3El = document.getElementById('winnerPlaceholder3');
+            if (n3El) n3El.textContent = names3[idx3];
+            if (a3El) a3El.textContent = win3.toLocaleString();
+            if (av3El) {
+              av3El.src = 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80';
+              av3El.style.display = 'block';
+            }
+            if (ph3El) ph3El.style.display = 'none';
+          } else {
+            winnerPopupEl.classList.add('hidden');
+          }
+        }
+
+        requestAnimationFrame(render);
+      }
+
+      // Initial direct draw
+      render();
+    })();
