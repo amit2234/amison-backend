@@ -276,12 +276,24 @@ const NewopController = {
             const NewopGiftService = require('../services/newopGiftService');
             const { giftId } = req.params;
             const gift = await NewopGiftService.deleteGift(req.callerUid, giftId || req.body.giftId);
-            res.json({ success: true, message: 'Gift deactivated successfully', gift });
+            res.json({ success: true, message: 'Gift deleted successfully', gift });
         } catch (e) {
             console.error('[NewopController] deleteGift error:', e);
             res.status(500).json({ success: false, error: e.message });
         }
     },
+
+    async clearAllGifts(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const result = await NewopGiftService.clearAllGifts(req.callerUid);
+            res.json({ success: true, message: 'All gifts deleted successfully', result });
+        } catch (e) {
+            console.error('[NewopController] clearAllGifts error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
 
     // =========================================================================
     // EMOJI MANAGEMENT CONTROLLERS (100% PURE MONGODB + CLOUDINARY + REDIS + WS)
