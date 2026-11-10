@@ -113,6 +113,7 @@ const gamesRoutes = require('./routes/games');
 app.use('/api/newop/games', gamesRoutes);
 app.use('/api/games', gamesRoutes);
 const path = require('path');
+app.use('/games', express.static(path.join(__dirname, 'games')));
 app.use('/games', express.static(path.join(__dirname, 'public/games')));
 
 // 16. Couple Partner REST API (/api/couple)
@@ -131,6 +132,10 @@ const roomWss = setupRoomSocket(server);
 const setupChatSocket = require('./sockets/chatSocket');
 const chatWss = setupChatSocket(server);
 
+// 3. 24/7 Authoritative Game Engine WebSocket (/ws/games, /ws/games/galaxy_star)
+const setupGameSocket = require('./sockets/gameSocket');
+const gameWss = setupGameSocket(server);
+
 // Dedicated HTTP Upgrade Router (Zero 400 Bad Request collisions, Cloudflare & Render compliant)
 server.on('upgrade', (request, socket, head) => {
     try {
@@ -142,6 +147,10 @@ server.on('upgrade', (request, socket, head) => {
         } else if (pathname === '/ws/chat' || pathname.startsWith('/ws/chat/')) {
             chatWss.handleUpgrade(request, socket, head, (ws) => {
                 chatWss.emit('connection', ws, request);
+            });
+        } else if (pathname === '/ws/games' || pathname.startsWith('/ws/games/')) {
+            gameWss.handleUpgrade(request, socket, head, (ws) => {
+                gameWss.emit('connection', ws, request);
             });
         } else {
             socket.destroy();
