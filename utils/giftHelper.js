@@ -1,13 +1,14 @@
-const { uploadBufferToCloudinary } = require('../services/cloudinaryService');
+const { uploadBufferToCloudinary, detectMediaMagicBytes } = require('../services/cloudinaryService');
 
 /**
- * Resolves animation type based on URL extension
+ * Resolves animation type based on URL extension or magic bytes
  */
 function resolveAnimationType(animUrl, iconUrl) {
     const combined = `${animUrl || ''} ${iconUrl || ''}`.toLowerCase();
     if (combined.includes('.svga')) return 'SVGA_ANIMATION';
     if (combined.includes('.gif')) return 'GIF_ANIMATION';
     if (combined.includes('.svg')) return 'SVG_ANIMATION';
+    if (combined.includes('.webp')) return 'CUSTOM_MEDIA';
     return 'CUSTOM_MEDIA';
 }
 
@@ -19,10 +20,12 @@ async function processGiftMediaUploads(files = {}, existingIcon = '', existingAn
     let finalAnimUrl = existingAnim;
 
     if (files && files.iconFile && files.iconFile[0]) {
+        const iconBuf = files.iconFile[0].buffer;
         const iconUpload = await uploadBufferToCloudinary(
-            files.iconFile[0].buffer,
+            iconBuf,
             'amison/gifts/thumbnails',
-            'image'
+            'image',
+            { filename: files.iconFile[0].originalname || `icon_${Date.now()}` }
         );
         if (iconUpload && iconUpload.secure_url) {
             finalIconUrl = iconUpload.secure_url;
@@ -30,11 +33,16 @@ async function processGiftMediaUploads(files = {}, existingIcon = '', existingAn
     }
 
     if (files && files.animFile && files.animFile[0]) {
-        const isSvga = files.animFile[0].originalname && files.animFile[0].originalname.toLowerCase().endsWith('.svga');
+        const animBuf = files.animFile[0].buffer;
+        const detected = detectMediaMagicBytes(animBuf);
+        const isSvga = (detected && detected.ext === 'svga') ||
+            (files.animFile[0].originalname && files.animFile[0].originalname.toLowerCase().endsWith('.svga'));
+
         const animUpload = await uploadBufferToCloudinary(
-            files.animFile[0].buffer,
+            animBuf,
             'amison/gifts/animations',
-            isSvga ? 'raw' : 'auto'
+            isSvga ? 'raw' : (detected ? detected.resourceType : 'auto'),
+            { filename: files.animFile[0].originalname || `anim_${Date.now()}.${isSvga ? 'svga' : (detected ? detected.ext : 'dat')}` }
         );
         if (animUpload && animUpload.secure_url) {
             finalAnimUrl = animUpload.secure_url;
