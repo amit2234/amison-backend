@@ -128,14 +128,24 @@ const NewopGiftService = {
 
         if (!targetGiftId) throw new Error('Target gift ID is required');
         const gift = await Gift.findOne({ $or: [{ giftId: targetGiftId }, { _id: mongoose.isValidObjectId(targetGiftId) ? targetGiftId : null }] });
-        if (!gift) throw new Error(`Gift not found with id: ${targetGiftId}`);
+        if (gift) {
+            await Gift.deleteOne({ _id: gift._id });
+        }
 
-        gift.isActive = false;
-        await gift.save();
+        await refreshAndBroadcast('delete', { giftId: targetGiftId });
+        return gift || { giftId: targetGiftId };
+    },
 
-        await refreshAndBroadcast('delete', { giftId: gift.giftId });
-        return gift;
+    /**
+     * Clear / Delete ALL gifts catalog from MongoDB
+     */
+    async clearAllGifts(callerUid) {
+        await verifyZeroTrustAdmin(callerUid);
+        await Gift.deleteMany({});
+        await refreshAndBroadcast('clear', { gifts: [] });
+        return { success: true, message: 'All gifts deleted permanently' };
     }
 };
+
 
 module.exports = NewopGiftService;
