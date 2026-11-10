@@ -45,6 +45,12 @@ router.post('/gifts/create', NewopController.requireNewopAdmin, giftUploadMiddle
 router.post('/gifts/add', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
 router.put('/gifts/edit/:giftId', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
 router.post('/gifts/edit', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
+router.delete('/gifts/delete/:giftId', NewopController.requireNewopAdmin, NewopController.deleteGift);
+router.post('/gifts/delete', NewopController.requireNewopAdmin, NewopController.deleteGift);
+router.delete('/gifts/clear', NewopController.requireNewopAdmin, NewopController.clearAllGifts);
+router.post('/gifts/clear', NewopController.requireNewopAdmin, NewopController.clearAllGifts);
+
+
 const emojiUploadMiddleware = upload.fields([
     { name: 'mediaFile', maxCount: 1 },
     { name: 'media', maxCount: 1 }
