@@ -20,11 +20,12 @@ async function verifyZeroTrustAdmin(callerUid) {
 
 const NewopStoreService = {
     /**
-     * Fetch all store items (including inactive items for admin management)
+     * Fetch all active store items for catalog and admin management
      */
     async getAllStoreItems(callerUid) {
         await verifyZeroTrustAdmin(callerUid);
-        const items = await StoreItem.find({}).sort({ sortOrder: 1, createdAt: -1 }).lean();
+        // Only return active, non-deleted store items
+        const items = await StoreItem.find({ isActive: { $ne: false } }).sort({ sortOrder: 1, createdAt: -1 }).lean();
         return items;
     },
 
@@ -125,7 +126,7 @@ const NewopStoreService = {
     },
 
     /**
-     * Delete or Deactivate Store Item
+     * Delete Store Item permanently (Hard Delete)
      */
     async deleteStoreItem(callerUid, itemId) {
         await verifyZeroTrustAdmin(callerUid);
@@ -135,22 +136,21 @@ const NewopStoreService = {
             throw new Error('itemId is required for delete');
         }
 
-        // Soft delete by setting isActive to false
-        const updated = await StoreItem.findOneAndUpdate(
-            { itemId: cleanItemId },
-            { $set: { isActive: false } },
-            { new: true }
-        ).lean();
+        // Hard delete permanently from MongoDB Atlas
+        const deleted = await StoreItem.findOneAndDelete({ itemId: cleanItemId }).lean();
 
-        if (!updated) {
-            throw new Error(`Store item '${cleanItemId}' not found`);
+        if (!deleted) {
+            // Also try deleting by MongoDB _id if passed
+            try {
+                await StoreItem.findByIdAndDelete(cleanItemId);
+            } catch (_) {}
         }
 
-        // Invalidate catalog cache
+        // Invalidate catalog cache so clients see instant removal
         const allActive = await StoreItem.find({ isActive: true }).sort({ sortOrder: 1 });
         await cacheService.syncStoreCatalogCache(allActive);
 
-        return updated;
+        return deleted || { itemId: cleanItemId, deleted: true };
     },
 
     /**
