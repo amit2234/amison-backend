@@ -27,14 +27,21 @@ const NewopController = {
 
     async login(req, res) {
         try {
-            const { uid } = req.body;
+            const { uid, password } = req.body || {};
             if (!uid) return res.status(400).json({ success: false, error: 'UID is required' });
 
             const cleanUid = String(uid).trim();
             const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(cleanUid);
 
             if (!isAuth) {
-                return res.status(403).json({ success: false, error: 'Unauthorized Newop Admin UID' });
+                return res.status(403).json({ success: false, error: 'Access denied: Unauthorized Newop Admin UID' });
+            }
+
+            if (password !== undefined && password !== null) {
+                const isPassValid = await NewopAuthService.verifyAdminPassword(cleanUid, password);
+                if (!isPassValid) {
+                    return res.status(401).json({ success: false, error: 'Incorrect Master PIN.' });
+                }
             }
 
             return res.json({
