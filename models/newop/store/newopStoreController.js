@@ -1,6 +1,6 @@
 const FrameUploadService = require('./frameUploadService');
 const NewopStoreService = require('../../../services/newopStoreService');
-const StoreItem = require('../../../models/StoreItem');
+const StoreItem = require('../../StoreItem');
 const cacheService = require('../../../services/cacheService');
 
 /**
@@ -34,117 +34,151 @@ const newopStoreController = {
                 mediaUrl = uploadRes.mediaUrl;
             }
 
-            if (!mediaUrl) {
-                return res.status(400).json({ success: false, error: 'Media file (SVGA/SVG/GIF/PNG) or mediaUrl is required.' });
+            if (!mediaUrl && !iconEmoji) {
+                return res.status(400).json({ success: false, error: 'Either mediaFile upload or mediaUrl/iconEmoji is required.' });
             }
 
-            // Generate clean unique ID if not passed
-            const prefix = cleanCategory.substring(0, 2).toLowerCase();
-            const randomSuffix = Math.random().toString(36).substring(2, 8);
-            const itemId = req.body.itemId || `${prefix}_${randomSuffix}`;
-
-            // Save to MongoDB Atlas via NewopStoreService
-            const createdItem = await NewopStoreService.addStoreItem(req.callerUid, {
-                itemId,
-                category: cleanCategory,
+            const createdItem = await NewopStoreService.createStoreItem({
                 name: String(name).trim(),
-                price: Math.max(0, Number(price) || 0),
-                iconEmoji: iconEmoji || (cleanCategory === 'Frames' ? '👑' : '✨'),
-                mediaUrl,
+                category: cleanCategory,
+                price: price ? parseInt(price, 10) : 1000,
+                iconEmoji: iconEmoji || '🎁',
+                mediaUrl: mediaUrl,
+                description: description || `${cleanCategory} item`,
                 rarity: rarity || 'Epic',
-                validityDays: validityDays !== undefined ? Number(validityDays) : 30,
-                description: description || '',
-                sortOrder: sortOrder !== undefined ? Number(sortOrder) : 10,
-                isActive: isActive !== undefined ? (String(isActive) === 'true' || isActive === true) : true
+                validityDays: validityDays ? parseInt(validityDays, 10) : 30,
+                sortOrder: sortOrder ? parseInt(sortOrder, 10) : 0,
+                isActive: isActive === undefined ? true : (isActive === 'true' || isActive === true)
             });
 
-            console.log(`✅ [NewopStoreController] Created new store item: ${createdItem.name} (${createdItem.itemId})`);
-            return res.json({
+            return res.status(201).json({
                 success: true,
-                message: `Store item '${createdItem.name}' successfully uploaded and saved!`,
+                message: 'Store item created successfully in MongoDB Atlas.',
                 item: createdItem
             });
-        } catch (err) {
-            console.error('❌ [NewopStoreController] uploadAndCreateItem Error:', err);
-            return res.status(500).json({ success: false, error: err.message });
+        } catch (error) {
+            console.error('❌ [newopStoreController] uploadAndCreateItem Error:', error);
+            return res.status(500).json({ success: false, error: error.message });
         }
     },
 
     /**
      * GET /api/newop/store/items
+     * Returns full admin list of store items
      */
     async getStoreItems(req, res) {
         try {
-            const items = await NewopStoreService.getAllStoreItems(req.callerUid);
+            const category = req.query.category;
+            const items = await NewopStoreService.getAllAdminItems(category);
             return res.json({ success: true, count: items.length, items });
-        } catch (err) {
-            console.error('❌ [NewopStoreController] getStoreItems Error:', err);
-            return res.status(500).json({ success: false, error: err.message });
+        } catch (error) {
+            console.error('❌ [newopStoreController] getStoreItems Error:', error);
+            return res.status(500).json({ success: false, error: error.message });
         }
     },
 
     /**
-     * POST or PUT /api/newop/store/edit
+     * POST /api/newop/store/edit
+     * Edits an existing store item
      */
     async editStoreItem(req, res) {
         try {
-            const itemId = req.params.itemId || req.body.itemId;
-            const updated = await NewopStoreService.editStoreItem(req.callerUid, itemId, req.body);
-            return res.json({ success: true, message: 'Store item updated successfully', item: updated });
-        } catch (err) {
-            console.error('❌ [NewopStoreController] editStoreItem Error:', err);
-            return res.status(500).json({ success: false, error: err.message });
+            const itemId = req.params.itemId || req.body.itemId || req.body.id;
+            if (!itemId) {
+                return res.status(400).json({ success: false, error: 'itemId is required for editing.' });
+            }
+
+            const updatedItem = await NewopStoreService.updateStoreItem(itemId, req.body);
+            if (!updatedItem) {
+                return res.status(404).json({ success: false, error: 'Store item not found.' });
+            }
+
+            return res.json({
+                success: true,
+                message: 'Store item updated successfully.',
+                item: updatedItem
+            });
+        } catch (error) {
+            console.error('❌ [newopStoreController] editStoreItem Error:', error);
+            return res.status(500).json({ success: false, error: error.message });
         }
     },
 
     /**
      * POST /api/newop/store/toggle-active
-     * Quick toggle for enabling/disabling item visibility in Me Store
+     * Quick toggle for active/inactive state
      */
     async toggleActive(req, res) {
         try {
             const { itemId, isActive } = req.body;
             if (!itemId) {
-                return res.status(400).json({ success: false, error: 'itemId is required' });
+                return res.status(400).json({ success: false, error: 'itemId is required.' });
             }
-            const updated = await NewopStoreService.editStoreItem(req.callerUid, itemId, {
-                isActive: !!isActive
-            });
+
+            const updated = await NewopStoreService.toggleItemActive(itemId, isActive);
+            if (!updated) {
+                return res.status(404).json({ success: false, error: 'Store item not found.' });
+            }
+
             return res.json({
                 success: true,
-                message: `Item status updated to ${updated.isActive ? 'Active' : 'Inactive'}`,
+                message: `Item status updated to ${updated.isActive ? 'ACTIVE' : 'INACTIVE'}.`,
                 item: updated
             });
-        } catch (err) {
-            console.error('❌ [NewopStoreController] toggleActive Error:', err);
-            return res.status(500).json({ success: false, error: err.message });
+        } catch (error) {
+            console.error('❌ [newopStoreController] toggleActive Error:', error);
+            return res.status(500).json({ success: false, error: error.message });
         }
     },
 
     /**
-     * POST or DELETE /api/newop/store/delete
+     * POST /api/newop/store/delete
+     * Hard deletes store item
      */
     async deleteStoreItem(req, res) {
         try {
-            const itemId = req.params.itemId || req.body.itemId;
-            const deleted = await NewopStoreService.deleteStoreItem(req.callerUid, itemId);
-            return res.json({ success: true, message: 'Store item deleted successfully', item: deleted });
-        } catch (err) {
-            console.error('❌ [NewopStoreController] deleteStoreItem Error:', err);
-            return res.status(500).json({ success: false, error: err.message });
+            const itemId = req.params.itemId || req.body.itemId || req.body.id;
+            if (!itemId) {
+                return res.status(400).json({ success: false, error: 'itemId is required for deletion.' });
+            }
+
+            const deleted = await NewopStoreService.deleteStoreItem(itemId);
+            if (!deleted) {
+                return res.status(404).json({ success: false, error: 'Store item not found or already deleted.' });
+            }
+
+            return res.json({
+                success: true,
+                message: `Store item ${itemId} deleted successfully.`
+            });
+        } catch (error) {
+            console.error('❌ [newopStoreController] deleteStoreItem Error:', error);
+            return res.status(500).json({ success: false, error: error.message });
         }
     },
 
     /**
      * POST /api/newop/store/grant
+     * Directly grants store item to a user
      */
     async grantStoreItem(req, res) {
         try {
-            const result = await NewopStoreService.grantItemToUser(req.callerUid, req.body);
-            return res.json({ success: true, message: 'Item granted to target user successfully', result });
-        } catch (err) {
-            console.error('❌ [NewopStoreController] grantStoreItem Error:', err);
-            return res.status(500).json({ success: false, error: err.message });
+            const { targetUserId, itemId, validityDays } = req.body;
+            if (!targetUserId || !itemId) {
+                return res.status(400).json({ success: false, error: 'targetUserId and itemId are required.' });
+            }
+
+            const days = validityDays ? parseInt(validityDays, 10) : 30;
+            const granted = await NewopStoreService.grantItemToUser(targetUserId, itemId, days);
+
+            return res.json({
+                success: true,
+                message: `Item ${itemId} granted to user ${targetUserId} for ${days} days.`,
+                inventory: granted
+            });
+        } catch (error) {
+            console.error('❌ [newopStoreController] grantStoreItem Error:', error);
+            return res.status(500).json({ success: false, error: error.message });
         }
     }
 };
