@@ -6,10 +6,12 @@ const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const cacheService = require('../services/cacheService');
 
+const { requireNewopAdmin } = require('../middleware/authMiddleware');
+
 // Basic Game CRUD
 router.get('/', gameController.getGames);
-router.post('/', gameController.addGame);
-router.patch('/:gameId/status', gameController.toggleGameStatus);
+router.post('/', requireNewopAdmin, gameController.addGame);
+router.patch('/:gameId/status', requireNewopAdmin, gameController.toggleGameStatus);
 
 // ============================================================================
 // ZERO-TRUST GAME HANDSHAKE (Authenticates User & Warms up Redis Balance)
