@@ -1,4 +1,5 @@
 const RoomService = require('../services/roomService');
+const { uploadBufferToCloudinary } = require('../services/cloudinaryService');
 
 const RoomController = {
     async getLiveRooms(req, res) {
@@ -116,10 +117,67 @@ const RoomController = {
         }
     },
 
+    async searchRooms(req, res) {
+        try {
+            const q = String(req.query.query || req.query.q || '').trim();
+            const rooms = await RoomService.searchRooms(q);
+            return res.json({ success: true, rooms });
+        } catch (e) {
+            console.error('[RoomController] Search rooms error:', e);
+            return res.status(500).json({ success: false, rooms: [], error: e.message });
+        }
+    },
+
+    async uploadChatMedia(req, res) {
+        try {
+            if (!req.file || !req.file.buffer) {
+                return res.status(400).json({ success: false, error: 'Missing mediaFile in request' });
+            }
+            const result = await uploadBufferToCloudinary(
+                req.file.buffer,
+                'amison/room_chats',
+                'auto',
+                { filename: req.file.originalname || `chat_${Date.now()}` }
+            );
+            return res.json({
+                success: true,
+                mediaUrl: result.secure_url,
+                publicId: result.public_id
+            });
+        } catch (e) {
+            console.error('[RoomController] uploadChatMedia error:', e);
+            return res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async uploadCover(req, res) {
+        try {
+            if (!req.file || !req.file.buffer) {
+                return res.status(400).json({ success: false, error: 'Missing mediaFile in request' });
+            }
+            const result = await uploadBufferToCloudinary(
+                req.file.buffer,
+                'amison/rooms',
+                'auto',
+                { filename: req.file.originalname || `room_${Date.now()}` }
+            );
+            return res.json({
+                success: true,
+                mediaUrl: result.secure_url,
+                publicId: result.public_id
+            });
+        } catch (e) {
+            console.error('[RoomController] uploadCover error:', e);
+            return res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
     async updateMemberRole(req, res) {
         try {
-            const { roomId, targetUserId, newRole, requesterUid } = req.body || {};
-            const result = await RoomService.updateMemberRole(roomId, targetUserId, newRole, requesterUid);
+            const { roomId, targetUserId, userId, newRole, role, requesterUid } = req.body || {};
+            const resolvedTarget = targetUserId || userId;
+            const resolvedRole = newRole || role;
+            const result = await RoomService.updateMemberRole(roomId, resolvedTarget, resolvedRole, requesterUid);
             return res.json({ success: true, ...result });
         } catch (e) {
             console.error('[RoomController] Update member role error:', e);
