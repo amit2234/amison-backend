@@ -29,12 +29,12 @@ function detectMediaMagicBytes(buffer) {
     }
     // SVGA: PK.. (ZIP archive) OR 0x78 (zlib deflate)
     const isZipSvga = buffer[0] === 0x50 && buffer[1] === 0x4B;
-    const isZlibSvga = buffer[0] === 0x78 && (buffer[1] === 0x9C || buffer[1] === 0x01 || buffer[1] === 0xDA);
+    const isZlibSvga = buffer[0] === 0x78 && (buffer[1] === 0x9C || buffer[1] === 0x01 || buffer[1] === 0xDA || buffer[1] === 0x5E);
     if (isZipSvga || isZlibSvga) {
         return { ext: 'svga', mime: 'application/octet-stream', resourceType: 'raw', isAnimated: true };
     }
-    // SVG text
-    const headStr = buffer.slice(0, 64).toString('utf8').trim().toLowerCase();
+    // SVG text (handle UTF-8 BOM, comments, XML header)
+    const headStr = buffer.slice(0, 512).toString('utf8').replace(/^\uFEFF/, '').trim().toLowerCase();
     if (headStr.startsWith('<?xml') || headStr.startsWith('<svg') || headStr.includes('<svg')) {
         return { ext: 'svg', mime: 'image/svg+xml', resourceType: 'image', isAnimated: false };
     }
