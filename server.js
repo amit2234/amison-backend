@@ -180,4 +180,4 @@ server.on('upgrade', (request, socket, head) => {
 // Start Gateway Server
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 [Gateway] Amison Server running on port ${PORT}:${PORT}`);
-});
+}
