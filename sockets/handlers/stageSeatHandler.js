@@ -98,14 +98,26 @@ const stageSeatHandler = {
                 });
 
                 seat.userId = targetUserId;
+                seat.seatedAt = Date.now();
                 const cleanName = (data.userName && data.userName !== 'null' && data.userName !== 'undefined') ? data.userName : (data.name && data.name !== 'null' ? data.name : (seat.userName || 'User'));
                 seat.userName = cleanName;
                 const cleanAvatar = (data.userAvatar && data.userAvatar !== 'null' && data.userAvatar !== 'undefined') ? data.userAvatar : (data.avatar && data.avatar !== 'null' ? data.avatar : (seat.userAvatar || ''));
                 seat.userAvatar = cleanAvatar;
                 seat.userCustomId = (data.userCustomId && data.userCustomId !== 'null') ? data.userCustomId : '';
             } else {
+                // Flush accumulated mic time to DailyTaskService before clearing seat
+                if (seat.seatedAt && seat.userId) {
+                    const elapsedSec = Math.round((Date.now() - seat.seatedAt) / 1000);
+                    if (elapsedSec > 5) {
+                        try {
+                            const DailyTaskService = require('../../services/dailyTaskService');
+                            DailyTaskService.recordMicTime(seat.userId, elapsedSec);
+                        } catch (_) {}
+                    }
+                }
                 // Clear the seat completely when leaving or targetUserId is empty
                 seat.userId = null;
+                seat.seatedAt = null;
                 seat.userName = null;
                 seat.userAvatar = null;
                 seat.userCustomId = '';
