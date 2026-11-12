@@ -120,6 +120,10 @@ app.use('/games', express.static(path.join(__dirname, 'public/games')));
 const coupleRoutes = require('./routes/couple');
 app.use('/api/couple', coupleRoutes);
 
+// 17. Daily Task & Spin Wheel REST API (/api/daily-task)
+const dailyTaskRoutes = require('./routes/dailyTask');
+app.use('/api/daily-task', dailyTaskRoutes);
+
 // ============================================================================
 // MOUNT WEBSOCKET SERVERS WITH DEDICATED UPGRADE ROUTER
 // ============================================================================
