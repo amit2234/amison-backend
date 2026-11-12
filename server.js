@@ -65,7 +65,19 @@ app.use('/api', friendsRoutes); // Backwards compatibility for /api/user/follow 
 // 6. Store REST API (/api/store)
 const storeRoutes = require('./routes/store');
 app.use('/api/store', storeRoutes);
-app.use('/api/store/admin', require('./modules/newop/store/newopStoreRoutes'));
+let newopStoreRoutesModule;
+try {
+    newopStoreRoutesModule = require('./models/newop/store/newopStoreRoutes');
+} catch (e1) {
+    try {
+        newopStoreRoutesModule = require('./modules/newop/store/newopStoreRoutes');
+    } catch (e2) {
+        console.warn('⚠️ [Server] newopStoreRoutes module not found:', e2.message);
+    }
+}
+if (newopStoreRoutesModule) {
+    app.use('/api/store/admin', newopStoreRoutesModule);
+}
 
 // 7. Admin Panel Router (/api/newop)
 try {
