@@ -73,9 +73,17 @@ const uploadBufferToCloudinary = (buffer, folder = 'amison/store', resourceType 
         };
 
         if (options.filename) {
-            uploadOptions.public_id = options.filename.replace(/\.[^/.]+$/, "");
-            uploadOptions.use_filename = true;
-            uploadOptions.unique_filename = true;
+            if (finalResourceType === 'raw') {
+                uploadOptions.public_id = options.filename.toLowerCase().endsWith('.svga') 
+                    ? options.filename 
+                    : `${options.filename}.svga`;
+                uploadOptions.use_filename = true;
+                uploadOptions.unique_filename = false;
+            } else {
+                uploadOptions.public_id = options.filename.replace(/\.[^/.]+$/, "");
+                uploadOptions.use_filename = true;
+                uploadOptions.unique_filename = true;
+            }
         }
 
         // ZERO-CORRUPTION RULE:
