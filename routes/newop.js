@@ -149,4 +149,3 @@ router.post('/agencies/hosts/add', NewopController.requireNewopAdmin, AgencyCont
 router.post('/agencies/hosts/remove', NewopController.requireNewopAdmin, AgencyController.removeHost);
 
 module.exports = router;
-
