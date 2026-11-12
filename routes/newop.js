@@ -24,8 +24,19 @@ router.get('/zego-config', NewopController.getZegoConfig);
 router.post('/zego-config', NewopController.requireNewopAdmin, NewopController.updateZegoConfig);
 
 // Store Management Endpoints (100% Backend-Driven Modular Architecture)
-const newopStoreRoutes = require('../modules/newop/store/newopStoreRoutes');
-router.use('/store', newopStoreRoutes);
+let newopStoreRoutes;
+try {
+    newopStoreRoutes = require('../models/newop/store/newopStoreRoutes');
+} catch (e1) {
+    try {
+        newopStoreRoutes = require('../modules/newop/store/newopStoreRoutes');
+    } catch (e2) {
+        console.warn('⚠️ [Newop Router] newopStoreRoutes not found in models or modules:', e2.message);
+    }
+}
+if (newopStoreRoutes) {
+    router.use('/store', newopStoreRoutes);
+}
 
 // Dynamic Voice Room Gifts Endpoints (100% Pure MongoDB + Cloudinary + Redis + WS)
 const { upload } = require('../services/cloudinaryService');
