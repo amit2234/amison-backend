@@ -16,6 +16,11 @@ const conversationController = {
                 return res.status(400).json({ success: false, conversations: [], error: 'Missing UID' });
             }
 
+            if (!DirectConversation || typeof DirectConversation.find !== 'function') {
+                console.warn('[ConversationController] DirectConversation model unavailable, returning empty list');
+                return res.json({ success: true, zegoChatAppId: 0, conversations: [] });
+            }
+
             const rawConvs = await DirectConversation.find({
                 participants: cleanUid
             })
