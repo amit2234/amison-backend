@@ -23,14 +23,9 @@ router.post('/room/reset-photos', NewopController.requireNewopAdmin, NewopContro
 router.get('/zego-config', NewopController.getZegoConfig);
 router.post('/zego-config', NewopController.requireNewopAdmin, NewopController.updateZegoConfig);
 
-// Store Management Endpoints (100% Backend-Driven)
-router.get('/store/items', NewopController.requireNewopAdmin, NewopController.getStoreItems);
-router.post('/store/add', NewopController.requireNewopAdmin, NewopController.addStoreItem);
-router.put('/store/edit/:itemId', NewopController.requireNewopAdmin, NewopController.editStoreItem);
-router.post('/store/edit', NewopController.requireNewopAdmin, NewopController.editStoreItem);
-router.delete('/store/delete/:itemId', NewopController.requireNewopAdmin, NewopController.deleteStoreItem);
-router.post('/store/delete', NewopController.requireNewopAdmin, NewopController.deleteStoreItem);
-router.post('/store/grant', NewopController.requireNewopAdmin, NewopController.grantStoreItem);
+// Store Management Endpoints (100% Backend-Driven Modular Architecture)
+const newopStoreRoutes = require('../modules/newop/store/newopStoreRoutes');
+router.use('/store', newopStoreRoutes);
 
 // Dynamic Voice Room Gifts Endpoints (100% Pure MongoDB + Cloudinary + Redis + WS)
 const { upload } = require('../services/cloudinaryService');
