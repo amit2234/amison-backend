@@ -5,6 +5,7 @@ const roomStateHandler = require('./handlers/roomStateHandler');
 const stageSeatHandler = require('./handlers/stageSeatHandler');
 const roomChatHandler = require('./handlers/roomChatHandler');
 const roomGiftHandler = require('./handlers/roomGiftHandler');
+const { verifyFirebaseIdTokenCryptographically } = require('../middleware/authMiddleware');
 
 let globalRoomWss = null;
 
@@ -51,11 +52,30 @@ function setupRoomSocket(server) {
             const userId = (urlObj.searchParams.get('userId') || req.headers['x-user-id'] || '').trim();
             const roomId = (urlObj.searchParams.get('roomId') || req.headers['x-room-id'] || '').trim();
             const displayRoomId = (urlObj.searchParams.get('displayRoomId') || req.headers['x-display-room-id'] || '').trim();
+            const authHeader = String(req.headers['authorization'] || '').trim();
+            const rawToken = (urlObj.searchParams.get('token') || (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '')).trim();
+
+            if (rawToken) {
+                ws._authPromise = verifyFirebaseIdTokenCryptographically(rawToken)
+                    .then((decoded) => {
+                        const verifiedUid = String(decoded?.uid || decoded?.sub || '').trim();
+                        if (verifiedUid) {
+                            ws._verifiedUid = verifiedUid;
+                            const currentMeta = roomChannelManager.getMetadata(ws);
+                            if (currentMeta) {
+                                currentMeta.verifiedUid = verifiedUid;
+                            }
+                        }
+                        return verifiedUid;
+                    })
+                    .catch(() => '');
+            }
+
             if (displayRoomId && roomId) {
                 roomChannelManager.registerAlias(displayRoomId, roomId);
             }
             if (roomId && userId) {
-                roomChannelManager.joinRoomChannel(roomId, userId, ws);
+                roomChannelManager.joinRoomChannel(roomId, userId, ws, '', '', ws._verifiedUid || '');
             }
         } catch (_) {}
 
@@ -116,18 +136,32 @@ function setupRoomSocket(server) {
                     case 'room:kick':
                     case 'kick_user':
                         try {
+                            if (ws._authPromise) {
+                                try { await ws._authPromise; } catch (_) {}
+                            }
                             const RoomService = require('../services/roomService');
                             const kickPayload = (data && data.data && typeof data.data === 'object')
                                 ? { ...data, ...data.data }
                                 : data;
+                            const meta = roomChannelManager.getMetadata(ws);
+                            const actorUid = ws._verifiedUid || meta?.verifiedUid || meta?.userId || kickPayload.requesterUid || '';
                             await RoomService.kickUser(
                                 kickPayload.roomId,
                                 kickPayload.targetUserId || kickPayload.userId,
                                 kickPayload.durationHours || 3,
-                                kickPayload.hostName || 'Host'
+                                kickPayload.hostName || 'Host',
+                                actorUid
                             );
                         } catch (kErr) {
                             console.error('[RoomSocket] Kick error:', kErr.message);
+                            try {
+                                ws.send(JSON.stringify({
+                                    type: 'seat:rejected',
+                                    seatIndex: -1,
+                                    reason: 'FORBIDDEN',
+                                    message: kErr.message
+                                }));
+                            } catch (_) {}
                         }
                         break;
 
