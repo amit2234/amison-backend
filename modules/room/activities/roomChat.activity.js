@@ -8,6 +8,8 @@ const { channelManager, getBroadcastTargets } = require('../room.channel.manager
 const roomChatActivity = {
     handleRoomChat(data, ws) {
         const meta = channelManager.getMetadata(ws);
+        const verifiedSender = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+        if (!verifiedSender) return;
         const rawRoomId = String(data.roomId || meta?.roomId || '').trim();
         const canonicalRoomId = meta?.canonicalRoomId || channelManager.getCanonicalId(rawRoomId) || rawRoomId;
 
@@ -22,7 +24,7 @@ const roomChatActivity = {
             id: data.id || String(Date.now()),
             roomId: canonicalRoomId,
             rawRoomId,
-            senderId: ws?._verifiedUid || data.senderId || meta?.userId || '',
+            senderId: verifiedSender,
             senderName: data.senderName || meta?.userName || 'User',
             senderAvatar: data.senderAvatar || '',
             text: messageText,
@@ -38,6 +40,8 @@ const roomChatActivity = {
 
     handleRoomTyping(data, ws) {
         const meta = channelManager.getMetadata(ws);
+        const verifiedUser = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+        if (!verifiedUser) return;
         const rawRoomId = String(data.roomId || meta?.roomId || '').trim();
         const canonicalRoomId = meta?.canonicalRoomId || channelManager.getCanonicalId(rawRoomId) || rawRoomId;
         if (!canonicalRoomId) return;
@@ -45,7 +49,7 @@ const roomChatActivity = {
         const typingPacket = {
             type: 'room:typing',
             roomId: canonicalRoomId,
-            userId: ws?._verifiedUid || data.userId || meta?.userId || '',
+            userId: verifiedUser,
             userName: data.userName || meta?.userName || 'User',
             isTyping: Boolean(data.isTyping)
         };

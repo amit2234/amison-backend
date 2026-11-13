@@ -272,7 +272,11 @@ const roomStageCapacityActivity = {
         const meta = channelManager.getMetadata(ws);
         const rawRoomId = String(data.roomId || meta?.canonicalRoomId || meta?.roomId || '').trim();
         const displayRoomId = String(data.displayRoomId || '').trim();
-        const actorId = String(ws?._verifiedUid || meta?.verifiedUid || meta?.userId || data.actorUserId || data.userId || '').trim();
+        const actorId = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+        if (!actorId) {
+            sendCapacityRejected(ws, rawRoomId, ERROR_CODES.UNAUTHORIZED, 'Authentication required.');
+            return;
+        }
         const requestedSlots = data.speakerSlots !== undefined ? data.speakerSlots : data.slots;
 
         try {

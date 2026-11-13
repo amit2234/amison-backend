@@ -24,18 +24,8 @@ const roomLifecycleActivity = {
     async handleJoinRoom(data, ws, triggerPopularBroadcast = null) {
         await waitBoundedAuth(ws);
 
-        const joinToken = String(data.authToken || data.idToken || '').trim();
-        if (ws && !ws._verifiedUid && joinToken) {
-            try {
-                const decoded = await verifyFirebaseIdTokenCryptographically(joinToken);
-                if (decoded && (decoded.uid || decoded.sub)) {
-                    ws._verifiedUid = String(decoded.uid || decoded.sub).trim();
-                }
-            } catch (_) {}
-        }
-
         const rawRoomId = String(data.roomId || '').trim();
-        const userId = String(ws?._verifiedUid || data.userId || '').trim();
+        const userId = String(ws?._verifiedUid || '').trim();
         const displayRoomId = String(data.displayRoomId || '').trim();
 
         if (!rawRoomId || !userId || userId === 'null' || userId === 'undefined') return;
@@ -191,7 +181,8 @@ const roomLifecycleActivity = {
     async handleLeaveRoom(data, ws, triggerPopularBroadcast = null) {
         const meta = (ws ? channelManager.getMetadata(ws) : null) || {};
         const targetRoom = String(data.roomId || data.canonicalRoomId || meta?.canonicalRoomId || meta?.roomId || '').trim();
-        const userId = String(data.userId || meta?.verifiedUid || meta?.userId || '').trim();
+        const userId = String(ws?._verifiedUid || meta?.verifiedUid || meta?.userId || (!ws ? data.userId : '') || '').trim();
+        if (!userId) return;
         const userCustomId = String(data.userCustomId || meta?.userCustomId || '').trim();
         const userName = String(data.userName || meta?.userName || '').trim();
 

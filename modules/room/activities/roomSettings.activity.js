@@ -30,7 +30,14 @@ const roomSettingsActivity = {
         return room;
     },
 
-    async createOrUpdateRoom(data) {
+    async createOrUpdateRoom(data, callerUid = '') {
+        const cleanCallerUid = String(callerUid || '').trim();
+        if (!cleanCallerUid) {
+            const err = new Error('Authentication required');
+            err.statusCode = 401;
+            throw err;
+        }
+
         await roomDiscoveryActivity.cleanupDuplicateRooms();
         const {
             ownerUid,
@@ -46,9 +53,7 @@ const roomSettingsActivity = {
             speakerSlots
         } = data || {};
 
-        const rawUid = String(ownerUid || '').trim();
-        if (!rawUid) throw new Error('Missing ownerUid');
-
+        const rawUid = String(ownerUid || cleanCallerUid).trim();
         const cleanUid = await resolveTrueOwnerUid(rawUid);
         if (!cleanUid) throw new Error('Invalid ownerUid resolved');
 
@@ -75,6 +80,13 @@ const roomSettingsActivity = {
         }
 
         if (room) {
+            const roomMeta = roomRoleHelper.cacheRoomRoles(room);
+            const callerRole = await roomRoleHelper.resolveUserRoleInRoom(cleanCallerUid, roomMeta);
+            if (cleanCallerUid !== cleanUid && !['owner', 'co_owner'].includes(callerRole)) {
+                const err = new Error('Forbidden: Only Room Owner or Co-Owner can update room settings.');
+                err.statusCode = 403;
+                throw err;
+            }
             room.roomId = cleanUid;
             room.ownerUid = cleanUid;
             if (roomName && String(roomName).trim().length > 0) {
@@ -99,6 +111,11 @@ const roomSettingsActivity = {
             room.updatedAt = new Date();
             await room.save();
         } else {
+            if (cleanCallerUid !== cleanUid) {
+                const err = new Error('Forbidden: You can only create a room for your own account.');
+                err.statusCode = 403;
+                throw err;
+            }
             const sixDigitId = (displayRoomId && String(displayRoomId).trim().length > 0)
                 ? String(displayRoomId).trim()
                 : await generateUnique6DigitId();
@@ -158,20 +175,36 @@ const roomSettingsActivity = {
         return roomObj;
     },
 
-    async closeRoom(ownerUid, roomId) {
+    async closeRoom(ownerUid, roomId, callerUid = '') {
+        const cleanCallerUid = String(callerUid || '').trim();
+        if (!cleanCallerUid) {
+            const err = new Error('Authentication required');
+            err.statusCode = 401;
+            throw err;
+        }
         const cleanUid = String(ownerUid || '').trim();
         const cleanRoomId = String(roomId || '').trim();
         const resolvedUid = cleanUid ? await resolveTrueOwnerUid(cleanUid) : '';
 
+        const queryOr = [];
+        if (resolvedUid) queryOr.push({ ownerUid: resolvedUid }, { roomId: resolvedUid });
+        if (cleanUid) queryOr.push({ ownerUid: cleanUid });
+        if (cleanRoomId) queryOr.push({ roomId: cleanRoomId }, { displayRoomId: cleanRoomId });
+        if (queryOr.length === 0) queryOr.push({ ownerUid: cleanCallerUid }, { roomId: cleanCallerUid });
+
+        const targetRoom = await Room.findOne({ $or: queryOr }).lean();
+        if (targetRoom) {
+            const roomMeta = roomRoleHelper.cacheRoomRoles(targetRoom);
+            const callerRole = await roomRoleHelper.resolveUserRoleInRoom(cleanCallerUid, roomMeta);
+            if (cleanCallerUid !== targetRoom.ownerUid && !['owner', 'co_owner'].includes(callerRole)) {
+                const err = new Error('Forbidden: Only Room Owner or Co-Owner can close this room.');
+                err.statusCode = 403;
+                throw err;
+            }
+        }
+
         await Room.updateMany(
-            {
-                $or: [
-                    { ownerUid: resolvedUid },
-                    { ownerUid: cleanUid },
-                    { roomId: cleanRoomId },
-                    { displayRoomId: cleanRoomId }
-                ]
-            },
+            { $or: queryOr },
             { $set: { isLive: false, onlineCount: 0, heatScore: 0 } }
         );
 

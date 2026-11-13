@@ -84,7 +84,11 @@ const roomStageSeatsActivity = {
         const seatIndex = data.seatIndex !== undefined ? Number(data.seatIndex) : -1;
         if (!canonicalRoomId || Number.isNaN(seatIndex) || seatIndex < 0 || seatIndex >= SEAT_COUNT) return;
 
-        const rawActorId = String(ws?._verifiedUid || meta?.verifiedUid || meta?.userId || data.actorUserId || data.userId || '').trim();
+        const rawActorId = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+        if (!rawActorId) {
+            sendSeatRejected(ws, canonicalRoomId, seatIndex, ERROR_CODES.UNAUTHORIZED, 'Authentication required.');
+            return;
+        }
         const rawTargetUserId = data.userId !== undefined ? String(data.userId || '').trim() : '';
         const targetUserId = (rawTargetUserId === 'null' || rawTargetUserId === 'undefined') ? '' : rawTargetUserId;
 
@@ -344,7 +348,8 @@ const roomStageSeatsActivity = {
         const rawRoomId = String(data.roomId || meta?.roomId || '').trim();
         const canonicalRoomId = meta?.canonicalRoomId || channelManager.getCanonicalId(rawRoomId) || rawRoomId;
         const slotIndex = data.slotIndex !== undefined ? Number(data.slotIndex) : (data.seatIndex !== undefined ? Number(data.seatIndex) : -1);
-        const senderId = String(ws?._verifiedUid || meta?.verifiedUid || data.senderId || meta?.userId || '').trim();
+        const senderId = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+        if (!senderId) return;
         const mediaUrl = String(data.mediaUrl || data.emojiUrl || '').trim();
 
         if (canonicalRoomId && slotIndex >= 0 && slotIndex < SEAT_COUNT && mediaUrl) {
@@ -369,7 +374,8 @@ const roomStageSeatsActivity = {
         const meta = channelManager.getMetadata(ws);
         const rawRoomId = String(data.roomId || meta?.roomId || '').trim();
         const { canonicalRoomId, roomMeta } = await resolveRoomContext(rawRoomId, meta);
-        const actorUid = String(ws?._verifiedUid || meta?.verifiedUid || meta?.userId || data.userId || '').trim();
+        const actorUid = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+        if (!actorUid) return;
         const seatIndex = data.seatIndex !== undefined ? Number(data.seatIndex) : -1;
         let isSpeaking = Boolean(data.isSpeaking);
         let isMuted = data.isMuted !== undefined ? Boolean(data.isMuted) : false;

@@ -35,13 +35,16 @@ const roomModerationActivity = {
             err.statusCode = 403;
             throw err;
         }
-        if (requesterUid && String(requesterUid).trim()) {
-            const actorRole = await roomRoleHelper.resolveUserRoleInRoom(requesterUid, roomMeta);
-            if (!roomRoleHelper.canModerate(actorRole, targetRole)) {
-                const err = new Error('Insufficient permissions to kick this user.');
-                err.statusCode = 403;
-                throw err;
-            }
+        if (!requesterUid || !String(requesterUid).trim()) {
+            const err = new Error('Unauthorized: Authentication required to kick users.');
+            err.statusCode = 401;
+            throw err;
+        }
+        const actorRole = await roomRoleHelper.resolveUserRoleInRoom(requesterUid, roomMeta);
+        if (!roomRoleHelper.canModerate(actorRole, targetRole)) {
+            const err = new Error('Insufficient permissions to kick this user.');
+            err.statusCode = 403;
+            throw err;
         }
 
         const expiry = Date.now() + (Number(durationHours) || 3) * 3600 * 1000;
@@ -136,7 +139,10 @@ const roomModerationActivity = {
                 ? { ...data, ...data.data }
                 : data;
             const meta = channelManager.getMetadata(ws);
-            const actorUid = ws?._verifiedUid || meta?.verifiedUid || meta?.userId || kickPayload.requesterUid || '';
+            const actorUid = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+            if (!actorUid) {
+                throw Object.assign(new Error('Unauthorized: Verified session required.'), { statusCode: 401 });
+            }
             await this.kickUser(
                 kickPayload.roomId,
                 kickPayload.targetUserId || kickPayload.userId,
@@ -190,9 +196,15 @@ const roomModerationActivity = {
         };
     },
 
-    async unbanUser(roomId, userId) {
+    async unbanUser(roomId, userId, requesterUid = '') {
         const cleanRoomId = String(roomId || '').trim();
         const cleanUserId = String(userId || '').trim();
+        const cleanActorUid = String(requesterUid || '').trim();
+        if (!cleanActorUid) {
+            const err = new Error('Unauthorized: Authentication required.');
+            err.statusCode = 401;
+            throw err;
+        }
         if (!cleanRoomId || !cleanUserId) return { success: false };
 
         const resolvedUid = await resolveTrueOwnerUid(cleanRoomId);
@@ -205,6 +217,15 @@ const roomModerationActivity = {
             ]
         });
         if (!room) return { success: false };
+
+        const roomMeta = roomRoleHelper.cacheRoomRoles(room);
+        const actorRole = await roomRoleHelper.resolveUserRoleInRoom(cleanActorUid, roomMeta);
+        if (!['owner', 'co_owner', 'admin'].includes(actorRole)) {
+            const err = new Error('Forbidden: Insufficient permissions to unban users.');
+            err.statusCode = 403;
+            throw err;
+        }
+
         room.kickouts = (room.kickouts || []).filter((k) => k.userId !== cleanUserId);
         await room.save();
         return { success: true };
@@ -232,15 +253,14 @@ const roomModerationActivity = {
         const targetCurrentRole = roomRoleHelper.resolveUserRoleFromMetaSync(targetIds, roomMeta);
         const desiredNormalized = roomRoleHelper.normalizeRoleName(roleRaw);
 
-        if (requesterUid && String(requesterUid).trim()) {
-            const actorRole = await roomRoleHelper.resolveUserRoleInRoom(requesterUid, roomMeta);
-            if (!roomRoleHelper.canAssignRole(actorRole, desiredNormalized, targetCurrentRole)) {
-                const err = new Error('Forbidden: You do not have authority to assign this role.');
-                err.statusCode = 403;
-                throw err;
-            }
-        } else if (targetCurrentRole === 'owner' || desiredNormalized === 'owner') {
-            const err = new Error('Forbidden: Room Owner role cannot be reassigned.');
+        if (!requesterUid || !String(requesterUid).trim()) {
+            const err = new Error('Unauthorized: Authentication required.');
+            err.statusCode = 401;
+            throw err;
+        }
+        const actorRole = await roomRoleHelper.resolveUserRoleInRoom(requesterUid, roomMeta);
+        if (!roomRoleHelper.canAssignRole(actorRole, desiredNormalized, targetCurrentRole)) {
+            const err = new Error('Forbidden: You do not have authority to assign this role.');
             err.statusCode = 403;
             throw err;
         }

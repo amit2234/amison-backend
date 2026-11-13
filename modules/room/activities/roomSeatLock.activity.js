@@ -108,7 +108,11 @@ const roomSeatLockActivity = {
             return;
         }
 
-        const rawActorId = String(ws?._verifiedUid || meta?.verifiedUid || meta?.userId || data.actorUserId || data.userId || '').trim();
+        const rawActorId = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+        if (!rawActorId) {
+            sendLockRejected(ws, canonicalRoomId, seatIndex, ERROR_CODES.UNAUTHORIZED, 'Authentication required.');
+            return;
+        }
         const actorIds = await roomRoleHelper.resolveUserIdentifiers(rawActorId, meta?.userCustomId || '');
         const actorRole = roomRoleHelper.resolveUserRoleFromMetaSync(actorIds, roomMeta);
 

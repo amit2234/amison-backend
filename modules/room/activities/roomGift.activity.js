@@ -10,7 +10,8 @@ const roomGiftActivity = {
         const meta = channelManager.getMetadata(ws);
         const rawRoomId = String(data.roomId || meta?.roomId || '').trim();
         const canonicalRoomId = meta?.canonicalRoomId || channelManager.getCanonicalId(rawRoomId) || rawRoomId;
-        const senderUid = String(ws?._verifiedUid || data.senderId || meta?.userId || '').trim();
+        const senderUid = String(ws?._verifiedUid || meta?.verifiedUid || '').trim();
+        if (!senderUid) return;
 
         try {
             const result = await giftService.sendGift({
