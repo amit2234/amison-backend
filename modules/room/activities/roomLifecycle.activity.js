@@ -111,7 +111,7 @@ const roomLifecycleActivity = {
         channelManager.joinRoomChannel(effectiveCanonicalId, canonicalUserId, ws, userName, userNumericId, ws?._verifiedUid || '');
 
         // 5. Hydrate 16-seat stage state & check if user already occupies a seat
-        const currentSeats = roomStateCache.hydrateSeats(effectiveCanonicalId, roomDoc?.seats);
+        const currentSeats = roomStateCache.hydrateSeats(effectiveCanonicalId, roomDoc?.seats, roomDoc?.lockedSeats, roomDoc?.speakerSlots);
         const existingSeatIndex = currentSeats.findIndex((s) => (
             s && s.userId && s.userId !== 'null' && (
                 String(s.userId).trim() === canonicalUserId
@@ -155,6 +155,8 @@ const roomLifecycleActivity = {
                     ownerUid: roomMeta?.ownerUid || '',
                     coOwners: roomMeta?.coOwners || [],
                     admins: roomMeta?.admins || [],
+                    speakerSlots: snapshot.speakerSlots,
+                    lockedSeats: snapshot.lockedSeats,
                     seats: snapshot.seats
                 }));
             } catch (_) {}
@@ -273,7 +275,19 @@ const roomLifecycleActivity = {
 
                 Room.updateOne(
                     { $or: [{ roomId: canonicalRoomId }, { ownerUid: canonicalRoomId }, { displayRoomId: canonicalRoomId }, { displayRoomId: targetRoom }] },
-                    { $set: { [`seats.${idx}`]: seat, updatedAt: new Date() } }
+                    {
+                        $set: {
+                            [`seats.${idx}.userId`]: null,
+                            [`seats.${idx}.name`]: null,
+                            [`seats.${idx}.userName`]: null,
+                            [`seats.${idx}.avatar`]: null,
+                            [`seats.${idx}.userAvatar`]: null,
+                            [`seats.${idx}.userCustomId`]: '',
+                            [`seats.${idx}.isSpeaking`]: false,
+                            [`seats.${idx}.isMuted`]: Boolean(seat.isMicTurnedOff),
+                            updatedAt: new Date()
+                        }
+                    }
                 ).catch(() => {});
             }
         });
