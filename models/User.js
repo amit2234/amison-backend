@@ -20,6 +20,7 @@ const userSchema = new mongoose.Schema({
     diamonds: { type: Number, default: 0, min: 0 },
     level: { type: Number, default: 1, min: 1 },
     role: { type: String, default: "user" },
+    isBanned: { type: Boolean, default: false },
     isSeller: { type: Boolean, default: false },
     isMerchant: { type: Boolean, default: false },
     sellerCenterRole: { type: String, default: "" }, // "seller", "marchent", or ""
