@@ -1,90 +1,98 @@
 const express = require('express');
 const router = express.Router();
 const DailyTaskService = require('../services/dailyTaskService');
-const { verifyAuthToken } = require('../middleware/authMiddleware');
+const { verifyStrictFirebaseToken } = require('../middleware/authMiddleware');
 
 /**
  * GET /api/daily-task/status
- * Fetches user task progress, 60m mic progress percentage, points balance, and free spins
+ * Fetches authoritative Daily Task Points, 60m mic progress percentage, free spins, and real Wallet Gold Coins
  */
-router.get('/status', verifyAuthToken, async (req, res) => {
+router.get('/status', verifyStrictFirebaseToken, async (req, res) => {
     try {
         const uid = req.callerUid;
-        const numericId = req.query.numericId || req.user?.numericId || 0;
-        const status = await DailyTaskService.getStatus(uid, numericId);
+        const status = await DailyTaskService.getStatus(uid);
         return res.json({ success: true, data: status });
     } catch (e) {
-        console.error('❌ [DailyTask] Error getting status:', e);
-        return res.status(500).json({ success: false, error: e.message });
+        const statusCode = e.status || 500;
+        if (statusCode >= 500) console.error('❌ [DailyTask] Error getting status:', e);
+        return res.status(statusCode).json({ success: false, error: e.message });
     }
 });
 
 /**
  * POST /api/daily-task/claim-login
- * Claims 200 - 500 Daily Points (24h once / midnight 00:00:00 rollover)
+ * Claims 200 - 500 Daily Points (once per IST day, 100% atomic)
  */
-router.post('/claim-login', verifyAuthToken, async (req, res) => {
+router.post('/claim-login', verifyStrictFirebaseToken, async (req, res) => {
     try {
         const uid = req.callerUid;
         const result = await DailyTaskService.claimDailyLogin(uid);
         if (!result.success) {
-            return res.status(400).json(result);
+            return res.status(result.status || 400).json(result);
         }
         return res.json(result);
     } catch (e) {
-        console.error('❌ [DailyTask] Error claiming daily login:', e);
-        return res.status(500).json({ success: false, error: e.message });
+        const statusCode = e.status || 500;
+        if (statusCode >= 500) console.error('❌ [DailyTask] Error claiming daily login:', e);
+        return res.status(statusCode).json({ success: false, error: e.message });
     }
 });
 
 /**
  * POST /api/daily-task/claim-mic
- * Claims 500 - 1000 Daily Points once 60 minutes on mic are completed
+ * Claims 500 - 1000 Daily Points once server-verified 60 minutes on mic are completed
  */
-router.post('/claim-mic', verifyAuthToken, async (req, res) => {
+router.post('/claim-mic', verifyStrictFirebaseToken, async (req, res) => {
     try {
         const uid = req.callerUid;
         const result = await DailyTaskService.claimMicTask(uid);
         if (!result.success) {
-            return res.status(400).json(result);
+            return res.status(result.status || 400).json(result);
         }
         return res.json(result);
     } catch (e) {
-        console.error('❌ [DailyTask] Error claiming mic task:', e);
-        return res.status(500).json({ success: false, error: e.message });
+        const statusCode = e.status || 500;
+        if (statusCode >= 500) console.error('❌ [DailyTask] Error claiming mic task:', e);
+        return res.status(statusCode).json({ success: false, error: e.message });
     }
 });
 
 /**
  * POST /api/daily-task/spin
- * Atomic Wheel Spin: Deducts 2000 Daily Points (or 1 Free Spin) & rolls server RNG to award real Gold Coins
+ * 100% Zero-Trust Atomic Wheel Spin:
+ * Deducts 2000 Daily Points (or 1 Free Spin), rolls crypto RNG, and credits Gold Coins directly into User.coins
  */
-router.post('/spin', verifyAuthToken, async (req, res) => {
+router.post('/spin', verifyStrictFirebaseToken, async (req, res) => {
     try {
         const uid = req.callerUid;
-        const result = await DailyTaskService.spin(uid);
+        const clientTxId = req.body?.txId || req.headers['x-idempotency-key'] || '';
+        const result = await DailyTaskService.spin(uid, clientTxId);
         if (!result.success) {
-            return res.status(400).json(result);
+            return res.status(result.status || 400).json(result);
         }
         return res.json(result);
     } catch (e) {
-        console.error('❌ [DailyTask] Error spinning wheel:', e);
-        return res.status(500).json({ success: false, error: e.message });
+        const statusCode = e.status || 500;
+        if (statusCode >= 500) console.error('❌ [DailyTask] Error spinning wheel:', e);
+        return res.status(statusCode).json({ success: false, error: e.message });
     }
 });
 
 /**
  * POST /api/daily-task/heartbeat-mic
- * Server/Room heartbeat recording elapsed mic seat seconds
+ * Zero-Trust mic heartbeat: Ignores client-sent seconds and flushes only genuine server-verified room seat time
  */
-router.post('/heartbeat-mic', verifyAuthToken, async (req, res) => {
+router.post('/heartbeat-mic', verifyStrictFirebaseToken, async (req, res) => {
     try {
         const uid = req.callerUid;
-        const seconds = Number(req.body.seconds) || 60;
-        await DailyTaskService.recordMicTime(uid, seconds);
-        return res.json({ success: true });
+        const result = await DailyTaskService.heartbeatMicFromRoomSeat(uid);
+        if (!result.success) {
+            return res.status(result.status || 400).json(result);
+        }
+        return res.json(result);
     } catch (e) {
-        return res.status(500).json({ success: false, error: e.message });
+        const statusCode = e.status || 500;
+        return res.status(statusCode).json({ success: false, error: e.message });
     }
 });
 
