@@ -1,6 +1,7 @@
 const roomDiscoveryActivity = require('../activities/roomDiscovery.activity');
 const roomSettingsActivity = require('../activities/roomSettings.activity');
 const roomModerationActivity = require('../activities/roomModeration.activity');
+const roomStageCapacityActivity = require('../activities/roomStageCapacity.activity');
 
 /**
  * Room REST Controller
@@ -170,6 +171,21 @@ const roomRestController = {
             return res.json({ success: true, ...result });
         } catch (e) {
             console.error('[RoomRest] Update member role error:', e);
+            const code = e.statusCode || 500;
+            return res.status(code).json({ success: false, error: e.message });
+        }
+    },
+
+    async setStageCapacity(req, res) {
+        try {
+            const roomId = req.params.id || req.body?.roomId;
+            const { speakerSlots, slots, requesterUid, actorUserId } = req.body || {};
+            const requestedSlots = speakerSlots !== undefined ? speakerSlots : slots;
+            const actorUid = req.verifiedUid || requesterUid || actorUserId || '';
+            const result = await roomStageCapacityActivity.updateStageCapacityRest(roomId, requestedSlots, actorUid);
+            return res.json({ success: true, ...result });
+        } catch (e) {
+            console.error('[RoomRest] Set stage capacity error:', e);
             const code = e.statusCode || 500;
             return res.status(code).json({ success: false, error: e.message });
         }
