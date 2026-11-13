@@ -87,8 +87,11 @@ function getOrCreateRoomSeats(roomId) {
             userId: null,
             userName: null,
             userAvatar: null,
+            userCustomId: '',
             isLocked: false,
             isMuted: false,
+            isMicTurnedOff: false,
+            isSpeaking: false,
             seatLabel: (i + 1).toString()
         })));
     }
@@ -98,9 +101,34 @@ function getOrCreateRoomSeats(roomId) {
             if (s.userId === 'null' || s.userId === 'undefined') s.userId = null;
             if (s.userName === 'null' || s.userName === 'undefined') s.userName = null;
             if (s.userAvatar === 'null' || s.userAvatar === 'undefined') s.userAvatar = null;
+            if (s.isMicTurnedOff === undefined) s.isMicTurnedOff = false;
+            if (s.isSpeaking === undefined) s.isSpeaking = false;
         }
     }
     return seats;
+}
+
+/**
+ * Hydrates initial lock/mute seat state from MongoDB Room.seats if RAM cache does not exist yet.
+ * Does not restore stale ghost occupants if nobody is actively connected.
+ */
+function hydrateRoomSeatsFromDoc(roomId, dbSeats) {
+    if (!roomId) return [];
+    if (roomSeatsMap.has(roomId)) {
+        return getOrCreateRoomSeats(roomId);
+    }
+    const initialized = getOrCreateRoomSeats(roomId);
+    if (Array.isArray(dbSeats)) {
+        for (let i = 0; i < Math.min(16, dbSeats.length); i++) {
+            const dbSeat = dbSeats[i];
+            if (!dbSeat || !initialized[i]) continue;
+            initialized[i].isLocked = Boolean(dbSeat.isLocked);
+            const mutedByHost = Boolean(dbSeat.isMicTurnedOff);
+            initialized[i].isMicTurnedOff = mutedByHost;
+            initialized[i].isMuted = mutedByHost || Boolean(dbSeat.isMuted);
+        }
+    }
+    return initialized;
 }
 
 /**
@@ -401,6 +429,7 @@ module.exports = {
     withUserLock,
     checkAndMarkIdempotency,
     getOrCreateRoomSeats,
+    hydrateRoomSeatsFromDoc,
     calculateRoomHeat,
     setUserOnline,
     removeUserOnline,
