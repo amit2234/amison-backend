@@ -7,7 +7,7 @@ const walletTransactionSchema = new mongoose.Schema({
     txId: { type: String, required: true, unique: true },
     type: {
         type: String,
-        enum: ['GIFT_SEND', 'GIFT_MULTI', 'CONVERT_DIAMOND_TO_COIN', 'WITHDRAW_DIAMOND', 'GUILD_TRANSFER', 'ADMIN_ADJUST'],
+        enum: ['GIFT_SEND', 'GIFT_MULTI', 'CONVERT_DIAMOND_TO_COIN', 'WITHDRAW_DIAMOND', 'GUILD_TRANSFER', 'ADMIN_ADJUST', 'DAILY_TASK_WHEEL_WIN'],
         required: true,
         index: true
     },
