@@ -261,7 +261,30 @@ async function requireNewopAdmin(req, res, next) {
     }
 }
 
+async function extractVerifiedUidOptional(req, res, next) {
+    try {
+        const authHeader = req.headers['authorization'];
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.slice(7).trim();
+            if (token) {
+                const decoded = await verifyFirebaseIdTokenCryptographically(token);
+                req.user = decoded;
+                req.verifiedUid = String(decoded.uid || decoded.sub || '').trim();
+                req.callerUid = req.verifiedUid;
+            }
+        }
+        return next();
+    } catch (err) {
+        return res.status(401).json({
+            success: false,
+            error: 'Unauthorized: Invalid or expired Firebase ID token.'
+        });
+    }
+}
+
 module.exports = {
+    verifyFirebaseIdTokenCryptographically,
+    extractVerifiedUidOptional,
     verifyStrictFirebaseToken,
     verifyAuthToken,
     requireNewopAdmin
