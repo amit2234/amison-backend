@@ -2,6 +2,7 @@ const WebSocket = require('ws');
 const cacheService = require('../../services/cacheService');
 const storeCache = require('./store.cache');
 const StoreItem = require('../../models/StoreItem');
+const { verifyWebSocketConnection } = require('../../middleware/authMiddleware');
 
 /**
  * Store Real-Time WebSocket Engine (/ws/store) + Multi-Channel Broadcaster
@@ -37,40 +38,57 @@ function setupStoreSocket() {
     storeWss = wss;
     console.log('🛍️ [StoreSocket] Real-Time Store Catalog Server running on /ws/store');
 
-    wss.on('connection', async (ws, req) => {
+    wss.on('connection', (ws, req) => {
         let userId = null;
         let lastKnownVersion = 0;
+        ws._verifiedUid = '';
 
         try {
             const urlObj = new URL(req.url, 'http://localhost');
-            userId = (urlObj.searchParams.get('userId') || req.headers['x-user-id'] || '').trim() || null;
             lastKnownVersion = Number(urlObj.searchParams.get('version') || 0) || 0;
-            if (userId) {
+        } catch (_) {}
+
+        ws._authPromise = verifyWebSocketConnection(req, { requireMongoUser: true })
+            .then(async ({ verifiedUid }) => {
+                ws._verifiedUid = verifiedUid;
+                userId = verifiedUid;
                 addStoreClient(userId, ws);
-            }
 
-            // Immediately send current catalog version / snapshot if client is stale
-            let cached = await storeCache.getCatalogCache();
-            if (!cached) {
-                cached = await storeCache.refreshCatalogCache(StoreItem);
-            }
+                // Immediately send current catalog version / snapshot if client is stale
+                let cached = await storeCache.getCatalogCache();
+                if (!cached) {
+                    cached = await storeCache.refreshCatalogCache(StoreItem);
+                }
 
-            if (ws.readyState === WebSocket.OPEN) {
-                const isStale = lastKnownVersion === 0 || lastKnownVersion < cached.version;
-                ws.send(JSON.stringify({
-                    type: isStale ? 'store:catalog_snapshot' : 'store:hello',
-                    version: cached.version,
-                    count: cached.items.length,
-                    items: isStale ? cached.items : undefined,
-                    timestamp: Date.now()
-                }));
-            }
-        } catch (err) {
-            console.warn('⚠️ [StoreSocket] Connection init notice:', err.message);
-        }
+                if (ws.readyState === WebSocket.OPEN) {
+                    const isStale = lastKnownVersion === 0 || lastKnownVersion < cached.version;
+                    ws.send(JSON.stringify({
+                        type: isStale ? 'store:catalog_snapshot' : 'store:hello',
+                        version: cached.version,
+                        count: cached.items.length,
+                        items: isStale ? cached.items : undefined,
+                        timestamp: Date.now()
+                    }));
+                }
+                return verifiedUid;
+            })
+            .catch((err) => {
+                console.warn('⚠️ [StoreSocket] Rejected unauthorized socket:', err?.message || err);
+                try { ws.close(4001, 'Unauthorized'); } catch (_) {}
+                return '';
+            });
 
         ws.on('message', async (raw) => {
             try {
+                if (ws._authPromise) {
+                    await ws._authPromise;
+                }
+                if (!ws._verifiedUid) {
+                    try { ws.close(4001, 'Unauthorized'); } catch (_) {}
+                    return;
+                }
+                userId = ws._verifiedUid;
+
                 const msg = JSON.parse(raw.toString());
                 if (msg.type === 'ping') {
                     if (ws.readyState === WebSocket.OPEN) {
@@ -83,8 +101,7 @@ function setupStoreSocket() {
                     return;
                 }
 
-                if (msg.type === 'store:register' && msg.userId) {
-                    userId = String(msg.userId).trim();
+                if (msg.type === 'store:register') {
                     addStoreClient(userId, ws);
                     return;
                 }
