@@ -2,6 +2,8 @@ const Room = require('../../models/Room');
 const User = require('../../models/User');
 const cacheService = require('../../services/cacheService');
 const roomChannelManager = require('../managers/roomChannelManager');
+const roomRoleHelper = require('../../services/roomRoleHelper');
+const { verifyFirebaseIdTokenCryptographically } = require('../../middleware/authMiddleware');
 
 /**
  * Handles Room State Events (Join Room, Leave Room, Heat Score Calculations)
@@ -9,8 +11,21 @@ const roomChannelManager = require('../managers/roomChannelManager');
  */
 const roomStateHandler = {
     async handleJoinRoom(data, ws, wss, broadcastPopularRooms) {
+        if (ws && ws._authPromise) {
+            try { await ws._authPromise; } catch (_) {}
+        }
+        const joinToken = String(data.authToken || data.idToken || '').trim();
+        if (ws && !ws._verifiedUid && joinToken) {
+            try {
+                const decoded = await verifyFirebaseIdTokenCryptographically(joinToken);
+                if (decoded && (decoded.uid || decoded.sub)) {
+                    ws._verifiedUid = String(decoded.uid || decoded.sub).trim();
+                }
+            } catch (_) {}
+        }
+
         const roomId = String(data.roomId || '').trim();
-        const userId = String(data.userId || '').trim();
+        const userId = String(ws?._verifiedUid || data.userId || '').trim();
         const displayRoomId = String(data.displayRoomId || '').trim();
 
         if (!roomId || !userId || userId === 'null' || userId === 'undefined') return;
@@ -36,8 +51,10 @@ const roomStateHandler = {
             roomChannelManager.registerAlias(displayRoomId, canonicalRoomId);
         }
 
+        const roomMeta = await roomRoleHelper.resolveRoomRolesMeta(canonicalRoomId, roomDoc);
+
         // Register client socket to canonical channel
-        roomChannelManager.joinRoomChannel(canonicalRoomId, userId, ws);
+        roomChannelManager.joinRoomChannel(canonicalRoomId, userId, ws, '', '', ws?._verifiedUid || '');
 
         // 2. Resolve real User Profile from MongoDB to prevent "User" or "null" fake placeholders
         let rawName = String(data.userName || data.name || '').trim();
@@ -69,12 +86,17 @@ const roomStateHandler = {
 
         if (!userName || userName === 'null' || userName === 'undefined') userName = 'User';
 
-        // Register client socket to canonical channel with full user metadata
-        roomChannelManager.joinRoomChannel(canonicalRoomId, canonicalUserId, ws, userName, userNumericId);
+        // Register client socket to canonical channel with full user metadata + verified UID
+        roomChannelManager.joinRoomChannel(canonicalRoomId, canonicalUserId, ws, userName, userNumericId, ws?._verifiedUid || '');
 
-        const currentSeats = cacheService.getOrCreateRoomSeats(canonicalRoomId);
-        const existingSeatIndex = currentSeats.findIndex(s => s && s.userId && s.userId !== 'null' && (String(s.userId).trim() === canonicalUserId || String(s.userId).trim() === userId));
+        // Hydrate 16-seat stage state from DB if RAM doesn't have it yet
+        const currentSeats = cacheService.hydrateRoomSeatsFromDoc(canonicalRoomId, roomDoc?.seats);
+        const existingSeatIndex = currentSeats.findIndex(s => s && s.userId && s.userId !== 'null' && (String(s.userId).trim() === canonicalUserId || String(s.userId).trim() === userId || (userNumericId && String(s.userCustomId || '').trim() === userNumericId)));
         const isOnSeat = existingSeatIndex >= 0;
+
+        // Authoritative role resolution (matches Owner UID, coOwners[], admins[] by UID OR numericId)
+        const normalizedUserRole = await roomRoleHelper.resolveUserRoleInRoom(canonicalUserId, roomMeta, userNumericId);
+        const authoritativeRole = roomRoleHelper.toDisplayRole(normalizedUserRole, isOnSeat);
 
         const roomParticipants = cacheService.getRoomParticipants(canonicalRoomId);
         if (canonicalUserId && canonicalUserId !== 'null' && canonicalUserId !== 'undefined') {
@@ -85,9 +107,16 @@ const roomStateHandler = {
                 numericId: userNumericId,
                 level: userLevel,
                 gender: userGender,
+                role: authoritativeRole,
                 onSeat: isOnSeat,
                 seatIndex: isOnSeat ? existingSeatIndex : -1
             });
+        }
+
+        // Refresh roles on all existing participants against latest roomMeta
+        for (const [pKey, pVal] of roomParticipants.entries()) {
+            const pNorm = await roomRoleHelper.resolveUserRoleInRoom(pVal.userId || pKey, roomMeta, pVal.numericId || '');
+            pVal.role = roomRoleHelper.toDisplayRole(pNorm, Boolean(pVal.onSeat));
         }
 
         const onlineCount = roomParticipants.size;
@@ -101,10 +130,13 @@ const roomStateHandler = {
             { $set: { isLive, heatScore, onlineCount, updatedAt: new Date() } }
         ).catch(err => console.error('[RoomStateHandler] Mongo join update error:', err.message));
 
-        // 4. Send full 16-seat stage snapshot to joining user
+        // 4. Send full 16-seat stage snapshot + authoritative room roles to joining user
         ws.send(JSON.stringify({
             type: 'seats:batch',
             roomId: canonicalRoomId,
+            ownerUid: roomMeta?.ownerUid || '',
+            coOwners: roomMeta?.coOwners || [],
+            admins: roomMeta?.admins || [],
             seats: currentSeats
         }));
 
@@ -113,6 +145,9 @@ const roomStateHandler = {
             type: 'room:state_update',
             roomId: canonicalRoomId,
             displayRoomId: roomDoc ? roomDoc.displayRoomId : roomId,
+            ownerUid: roomMeta?.ownerUid || '',
+            coOwners: roomMeta?.coOwners || [],
+            admins: roomMeta?.admins || [],
             heatScore,
             onlineCount,
             participants: Array.from(roomParticipants.values())
@@ -123,7 +158,7 @@ const roomStateHandler = {
             userId: canonicalUserId,
             userName,
             userAvatar,
-            role: isOnSeat ? 'Speaker' : 'Audience',
+            role: authoritativeRole,
             isJoining: true,
             onlineCount,
             participantCount: onlineCount,
@@ -236,7 +271,8 @@ const roomStateHandler = {
                     userCustomId: '',
                     isSpeaking: false,
                     isLocked: Boolean(seat.isLocked),
-                    isMuted: Boolean(seat.isMuted)
+                    isMuted: Boolean(seat.isMuted),
+                    isMicTurnedOff: Boolean(seat.isMicTurnedOff)
                 };
                 roomChannelManager.broadcastToRoom(canonicalRoomId, updatePacket);
                 if (canonicalRoomId !== targetRoom) {
@@ -265,9 +301,13 @@ const roomStateHandler = {
             { $set: { isLive, heatScore, onlineCount, updatedAt: new Date() } }
         ).catch(() => {});
 
+        const roomMeta = await roomRoleHelper.resolveRoomRolesMeta(canonicalRoomId).catch(() => null);
         const statePacket = {
             type: 'room:state_update',
             roomId: canonicalRoomId,
+            ownerUid: roomMeta?.ownerUid || '',
+            coOwners: roomMeta?.coOwners || [],
+            admins: roomMeta?.admins || [],
             heatScore,
             onlineCount,
             participants: Array.from(roomParticipants.values())
