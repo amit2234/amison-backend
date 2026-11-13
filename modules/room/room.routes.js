@@ -21,6 +21,7 @@ router.post('/unban', roomRestController.unbanUser);
 router.post('/role', extractVerifiedUidOptional, roomRestController.updateMemberRole);
 
 // Must come BEFORE parameterized '/:id'
+router.post('/:id/stage-capacity', extractVerifiedUidOptional, roomRestController.setStageCapacity);
 router.get('/:id/state', roomRestController.getRoomState);
 router.get('/:id', roomRestController.getRoomDetails);
 
