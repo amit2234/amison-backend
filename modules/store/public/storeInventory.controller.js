@@ -122,11 +122,12 @@ const storeInventoryController = {
      */
     async equipItem(req, res) {
         try {
-            const { userId, category, itemId, mediaUrl, tagText, vipNumber, itemName, expiresAt } = req.body;
+            const userId = String(req.callerUid || '').trim();
+            const { category, itemId, mediaUrl, tagText, vipNumber, itemName, expiresAt } = req.body || {};
             if (!userId || !category || !itemId) {
                 return res.status(400).json({
                     success: false,
-                    message: 'userId, category and itemId are required'
+                    message: 'Authenticated user, category and itemId are required'
                 });
             }
 
@@ -175,11 +176,12 @@ const storeInventoryController = {
      */
     async unequipItem(req, res) {
         try {
-            const { userId, category } = req.body;
+            const userId = String(req.callerUid || '').trim();
+            const { category } = req.body || {};
             if (!userId || !category) {
                 return res.status(400).json({
                     success: false,
-                    message: 'userId and category required'
+                    message: 'Authenticated user and category required'
                 });
             }
 

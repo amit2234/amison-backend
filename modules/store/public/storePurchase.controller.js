@@ -60,11 +60,12 @@ const storePurchaseController = {
      */
     async buyItem(req, res) {
         try {
-            const { userId, itemId, validityDays } = req.body;
+            const userId = String(req.callerUid || '').trim();
+            const { itemId, validityDays } = req.body || {};
             if (!userId || !itemId) {
                 return res.status(400).json({
                     success: false,
-                    message: 'userId and itemId are required'
+                    message: 'Authenticated user and itemId are required'
                 });
             }
 
