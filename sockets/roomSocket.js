@@ -117,7 +117,15 @@ function setupRoomSocket(server) {
                     case 'kick_user':
                         try {
                             const RoomService = require('../services/roomService');
-                            await RoomService.kickUser(data.roomId, data.targetUserId, data.durationHours || 3, data.hostName || 'Host');
+                            const kickPayload = (data && data.data && typeof data.data === 'object')
+                                ? { ...data, ...data.data }
+                                : data;
+                            await RoomService.kickUser(
+                                kickPayload.roomId,
+                                kickPayload.targetUserId || kickPayload.userId,
+                                kickPayload.durationHours || 3,
+                                kickPayload.hostName || 'Host'
+                            );
                         } catch (kErr) {
                             console.error('[RoomSocket] Kick error:', kErr.message);
                         }
