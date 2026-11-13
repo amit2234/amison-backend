@@ -57,32 +57,32 @@ const roomRestController = {
 
     async createOrUpdateRoom(req, res) {
         try {
-            const roomObj = await roomSettingsActivity.createOrUpdateRoom(req.body);
+            const roomObj = await roomSettingsActivity.createOrUpdateRoom(req.body, req.callerUid);
             return res.json({ success: true, room: roomObj });
         } catch (e) {
             console.error('[RoomRest] Create/Update room error:', e);
-            return res.status(500).json({ success: false, error: e.message });
+            return res.status(e.statusCode || 500).json({ success: false, error: e.message });
         }
     },
 
     async updateRoomDetails(req, res) {
         try {
-            const roomObj = await roomSettingsActivity.createOrUpdateRoom(req.body);
+            const roomObj = await roomSettingsActivity.createOrUpdateRoom(req.body, req.callerUid);
             return res.json({ success: true, room: roomObj });
         } catch (e) {
             console.error('[RoomRest] Update room details error:', e);
-            return res.status(500).json({ success: false, error: e.message });
+            return res.status(e.statusCode || 500).json({ success: false, error: e.message });
         }
     },
 
     async closeRoom(req, res) {
         try {
             const { ownerUid, roomId } = req.body || {};
-            await roomSettingsActivity.closeRoom(ownerUid, roomId);
+            await roomSettingsActivity.closeRoom(ownerUid, roomId, req.callerUid);
             return res.json({ success: true, message: 'Room closed successfully' });
         } catch (e) {
             console.error('[RoomRest] Close room error:', e);
-            return res.status(500).json({ success: false, error: e.message });
+            return res.status(e.statusCode || 500).json({ success: false, error: e.message });
         }
     },
 
@@ -127,8 +127,8 @@ const roomRestController = {
 
     async kickUser(req, res) {
         try {
-            const { roomId, targetUserId, durationHours, hostName, requesterUid } = req.body || {};
-            const actorUid = req.verifiedUid || requesterUid || '';
+            const { roomId, targetUserId, durationHours, hostName } = req.body || {};
+            const actorUid = String(req.callerUid || '').trim();
             const result = await roomModerationActivity.kickUser(roomId, targetUserId, durationHours, hostName, actorUid);
             return res.json({ success: true, ...result });
         } catch (e) {
@@ -154,19 +154,20 @@ const roomRestController = {
     async unbanUser(req, res) {
         try {
             const { roomId, userId } = req.body || {};
-            const result = await roomModerationActivity.unbanUser(roomId, userId);
+            const actorUid = String(req.callerUid || '').trim();
+            const result = await roomModerationActivity.unbanUser(roomId, userId, actorUid);
             return res.json({ success: true, ...result });
         } catch (e) {
-            return res.status(500).json({ success: false, error: e.message });
+            return res.status(e.statusCode || 500).json({ success: false, error: e.message });
         }
     },
 
     async updateMemberRole(req, res) {
         try {
-            const { roomId, targetUserId, userId, newRole, role, requesterUid } = req.body || {};
+            const { roomId, targetUserId, userId, newRole, role } = req.body || {};
             const resolvedTarget = targetUserId || userId;
             const resolvedRole = newRole || role;
-            const actorUid = req.verifiedUid || requesterUid || '';
+            const actorUid = String(req.callerUid || '').trim();
             const result = await roomModerationActivity.updateMemberRole(roomId, resolvedTarget, resolvedRole, actorUid);
             return res.json({ success: true, ...result });
         } catch (e) {
@@ -179,9 +180,9 @@ const roomRestController = {
     async setStageCapacity(req, res) {
         try {
             const roomId = req.params.id || req.body?.roomId;
-            const { speakerSlots, slots, requesterUid, actorUserId } = req.body || {};
+            const { speakerSlots, slots } = req.body || {};
             const requestedSlots = speakerSlots !== undefined ? speakerSlots : slots;
-            const actorUid = req.verifiedUid || requesterUid || actorUserId || '';
+            const actorUid = String(req.callerUid || '').trim();
             const result = await roomStageCapacityActivity.updateStageCapacityRest(roomId, requestedSlots, actorUid);
             return res.json({ success: true, ...result });
         } catch (e) {
