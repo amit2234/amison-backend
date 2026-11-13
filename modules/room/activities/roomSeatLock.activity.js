@@ -1,6 +1,7 @@
 const Room = require('../../../models/Room');
 const roomRoleHelper = require('../../../services/roomRoleHelper');
-const { SEAT_COUNT, ERROR_CODES } = require('../room.constants');
+const cacheService = require('../../../services/cacheService');
+const { SEAT_COUNT, DEFAULT_STAGE_CAPACITY, normalizeStageCapacity, ERROR_CODES } = require('../room.constants');
 const { channelManager, resolveRoomContext, getBroadcastTargets } = require('../room.channel.manager');
 const roomStateCache = require('../room.state.cache');
 const roomPresenceActivity = require('./roomPresence.activity');
@@ -30,34 +31,65 @@ function flushSeatMicTimeSafe(seat) {
     }
 }
 
-function persistSeatLockToMongo(roomId, rawRoomId, seatIndex, seat) {
-    Room.updateOne(
-        {
+async function persistSeatLockToMongo(roomId, rawRoomId, seatIndex, seat, seatsSnapshot) {
+    try {
+        const query = {
             $or: [
                 { roomId },
                 { ownerUid: roomId },
                 { displayRoomId: roomId },
-                ...(rawRoomId ? [{ displayRoomId: rawRoomId }] : [])
+                ...(rawRoomId && rawRoomId !== roomId ? [{ displayRoomId: rawRoomId }] : [])
             ]
-        },
-        {
-            $set: {
-                [`seats.${seatIndex}.index`]: seatIndex,
-                [`seats.${seatIndex}.seatIndex`]: seatIndex,
-                [`seats.${seatIndex}.userId`]: seat.userId || null,
-                [`seats.${seatIndex}.name`]: seat.userName || null,
-                [`seats.${seatIndex}.userName`]: seat.userName || null,
-                [`seats.${seatIndex}.avatar`]: seat.userAvatar || null,
-                [`seats.${seatIndex}.userAvatar`]: seat.userAvatar || null,
-                [`seats.${seatIndex}.userCustomId`]: seat.userCustomId || '',
-                [`seats.${seatIndex}.isLocked`]: Boolean(seat.isLocked),
-                [`seats.${seatIndex}.isMuted`]: Boolean(seat.isMuted),
-                [`seats.${seatIndex}.isMicTurnedOff`]: Boolean(seat.isMicTurnedOff),
-                [`seats.${seatIndex}.isSpeaking`]: Boolean(seat.isSpeaking),
-                updatedAt: new Date()
-            }
+        };
+        const nextLocked = Boolean(seat.isLocked);
+        const existing = await Room.findOne(query).select('seats lockedSeats').lean();
+
+        const setPayload = {
+            updatedAt: new Date()
+        };
+
+        if (!existing || !Array.isArray(existing.seats) || existing.seats.length < SEAT_COUNT) {
+            const lockedSet = new Set(Array.isArray(existing?.lockedSeats) ? existing.lockedSeats.map(Number) : []);
+            if (nextLocked) lockedSet.add(seatIndex);
+            else lockedSet.delete(seatIndex);
+
+            setPayload.seats = seatsSnapshot.map((s, idx) => ({
+                index: idx,
+                seatIndex: idx,
+                userId: s.userId || null,
+                name: s.userName || null,
+                userName: s.userName || null,
+                avatar: s.userAvatar || null,
+                userAvatar: s.userAvatar || null,
+                userCustomId: s.userCustomId || '',
+                isLocked: idx === seatIndex ? nextLocked : Boolean(s.isLocked || existing?.seats?.[idx]?.isLocked || lockedSet.has(idx)),
+                isMuted: Boolean(s.isMicTurnedOff || s.isMuted),
+                isMicTurnedOff: Boolean(s.isMicTurnedOff),
+                isSpeaking: Boolean(s.isSpeaking)
+            }));
+        } else {
+            setPayload[`seats.${seatIndex}.index`] = seatIndex;
+            setPayload[`seats.${seatIndex}.seatIndex`] = seatIndex;
+            setPayload[`seats.${seatIndex}.userId`] = seat.userId || null;
+            setPayload[`seats.${seatIndex}.name`] = seat.userName || null;
+            setPayload[`seats.${seatIndex}.userName`] = seat.userName || null;
+            setPayload[`seats.${seatIndex}.avatar`] = seat.userAvatar || null;
+            setPayload[`seats.${seatIndex}.userAvatar`] = seat.userAvatar || null;
+            setPayload[`seats.${seatIndex}.userCustomId`] = seat.userCustomId || '';
+            setPayload[`seats.${seatIndex}.isLocked`] = nextLocked;
+            setPayload[`seats.${seatIndex}.isMuted`] = Boolean(seat.isMuted);
+            setPayload[`seats.${seatIndex}.isMicTurnedOff`] = Boolean(seat.isMicTurnedOff);
+            setPayload[`seats.${seatIndex}.isSpeaking`] = Boolean(seat.isSpeaking);
         }
-    ).catch((err) => console.warn('[RoomSeatLock] Mongo lock persist notice:', err.message));
+
+        const updateOp = nextLocked
+            ? { $set: setPayload, $addToSet: { lockedSeats: seatIndex } }
+            : { $set: setPayload, $pull: { lockedSeats: seatIndex } };
+
+        await Room.updateOne(query, updateOp);
+    } catch (err) {
+        console.warn('[RoomSeatLock] Mongo lock persist notice:', err.message);
+    }
 }
 
 /**
@@ -89,6 +121,24 @@ const roomSeatLockActivity = {
                 'Only Room Owner, Co-Owner & Admin can lock or unlock seats.'
             );
             return;
+        }
+
+        if (!cacheService.roomHydratedSet.has(canonicalRoomId)) {
+            await roomStateCache.hydrateFromRedisIfEmpty(canonicalRoomId);
+            let docToHydrate = roomDoc;
+            if (!docToHydrate && !cacheService.roomHydratedSet.has(canonicalRoomId)) {
+                docToHydrate = await Room.findOne({
+                    $or: [{ roomId: canonicalRoomId }, { ownerUid: canonicalRoomId }, { displayRoomId: canonicalRoomId }]
+                }).select('seats lockedSeats speakerSlots').lean().catch(() => null);
+            }
+            if (docToHydrate) {
+                roomStateCache.hydrateSeats(
+                    canonicalRoomId,
+                    docToHydrate.seats,
+                    docToHydrate.lockedSeats,
+                    normalizeStageCapacity(docToHydrate.speakerSlots, DEFAULT_STAGE_CAPACITY)
+                );
+            }
         }
 
         const seats = roomStateCache.getOrCreateSeats(canonicalRoomId);
@@ -135,8 +185,9 @@ const roomSeatLockActivity = {
         const targets = getBroadcastTargets(canonicalRoomId, rawRoomId, meta, roomDoc);
         channelManager.broadcastToRoomTargets(targets, seatPacket);
 
-        persistSeatLockToMongo(canonicalRoomId, rawRoomId, seatIndex, seat);
+        roomStateCache.persistSeatLockToRedisAsync(canonicalRoomId, seatIndex, nextLocked);
         roomStateCache.persistStateToRedisAsync(canonicalRoomId, roomMeta);
+        persistSeatLockToMongo(canonicalRoomId, rawRoomId, seatIndex, seat, seats);
 
         if (vacatedOccupant) {
             await roomPresenceActivity.emitStateUpdate(canonicalRoomId, rawRoomId, meta, roomMeta, roomDoc, triggerPopularBroadcast);
