@@ -1,11 +1,17 @@
 const cacheService = require('../../services/cacheService');
 const roomRoleHelper = require('../../services/roomRoleHelper');
-const { SEAT_COUNT, ROOM_REDIS_STATE_TTL_SEC } = require('./room.constants');
+const {
+    SEAT_COUNT,
+    DEFAULT_STAGE_CAPACITY,
+    normalizeStageCapacity,
+    ROOM_REDIS_STATE_TTL_SEC,
+    ROOM_DURABLE_KEY_TTL_SEC
+} = require('./room.constants');
 
 /**
  * Dual-Layer Room State Cache (0ms RAM + Non-Blocking Redis Sync)
- * Keeps 16-seat grid, lock flags, active participants, and heat scores synchronized
- * without blocking WebSocket threads on MongoDB or Redis I/O.
+ * Keeps 16-seat grid, lock flags, stage capacity (4/8/12/16), active participants,
+ * and heat scores synchronized without blocking WebSocket threads on MongoDB or Redis I/O.
  */
 function createEmptySeat(index) {
     return {
@@ -53,18 +59,56 @@ function getOrCreateSeats(canonicalRoomId) {
     return sanitizeSeats(seats);
 }
 
-function hydrateSeats(canonicalRoomId, dbSeats) {
-    const seats = cacheService.hydrateRoomSeatsFromDoc(canonicalRoomId, dbSeats);
+function hydrateSeats(canonicalRoomId, dbSeats, dbLockedSeats = null, dbSpeakerSlots = null) {
+    const seats = cacheService.hydrateRoomSeatsFromDoc(canonicalRoomId, dbSeats, dbLockedSeats, dbSpeakerSlots);
     return sanitizeSeats(seats);
+}
+
+function getSpeakerSlots(canonicalRoomId, fallback = DEFAULT_STAGE_CAPACITY) {
+    return cacheService.getRoomSpeakerSlots(canonicalRoomId, normalizeStageCapacity(fallback));
+}
+
+function setSpeakerSlots(canonicalRoomId, slots) {
+    const normalized = normalizeStageCapacity(slots);
+    cacheService.setRoomSpeakerSlots(canonicalRoomId, normalized);
+    return normalized;
 }
 
 function getParticipantsMap(canonicalRoomId) {
     return cacheService.getRoomParticipants(canonicalRoomId);
 }
 
+function persistSeatLockToRedisAsync(canonicalRoomId, seatIndex, isLocked) {
+    if (!canonicalRoomId || seatIndex < 0 || seatIndex >= SEAT_COUNT) return;
+    const redis = cacheService.redisClient;
+    if (!redis || redis.status !== 'ready') return;
+    try {
+        const key = `room:locks:${canonicalRoomId}`;
+        redis.pipeline()
+            .hset(key, String(seatIndex), isLocked ? '1' : '0')
+            .expire(key, ROOM_DURABLE_KEY_TTL_SEC)
+            .exec()
+            .catch(() => {});
+    } catch (_) {}
+}
+
+function persistCapacityToRedisAsync(canonicalRoomId, speakerSlots) {
+    if (!canonicalRoomId) return;
+    const redis = cacheService.redisClient;
+    if (!redis || redis.status !== 'ready') return;
+    try {
+        redis.set(
+            `room:capacity:${canonicalRoomId}`,
+            String(normalizeStageCapacity(speakerSlots)),
+            'EX',
+            ROOM_DURABLE_KEY_TTL_SEC
+        ).catch(() => {});
+    } catch (_) {}
+}
+
 /**
  * Hydrates RAM from Redis if this worker just started/woke up from cold start
- * and a recent snapshot exists in Redis.
+ * and a recent snapshot or durable lock/capacity exists in Redis.
  */
 async function hydrateFromRedisIfEmpty(canonicalRoomId) {
     if (!canonicalRoomId) return null;
@@ -72,30 +116,59 @@ async function hydrateFromRedisIfEmpty(canonicalRoomId) {
     if (!redis || redis.status !== 'ready') return null;
 
     const existingParticipants = getParticipantsMap(canonicalRoomId);
-    if (existingParticipants.size > 0 && cacheService.roomSeatsMap.has(canonicalRoomId)) {
+    const alreadyHydrated = cacheService.roomHydratedSet.has(canonicalRoomId);
+    if (alreadyHydrated && existingParticipants.size > 0 && cacheService.roomSeatsMap.has(canonicalRoomId)) {
         return null;
     }
 
     try {
-        const raw = await redis.get(`room:state:${canonicalRoomId}`);
-        if (!raw) return null;
-        const parsed = JSON.parse(raw);
+        const results = await redis.pipeline()
+            .get(`room:state:${canonicalRoomId}`)
+            .hgetall(`room:locks:${canonicalRoomId}`)
+            .get(`room:capacity:${canonicalRoomId}`)
+            .exec();
 
-        if (Array.isArray(parsed.seats) && !cacheService.roomSeatsMap.has(canonicalRoomId)) {
+        const rawState = results?.[0]?.[1] || null;
+        const locksHash = results?.[1]?.[1] || null;
+        const capRaw = results?.[2]?.[1] || null;
+        const parsed = rawState ? JSON.parse(rawState) : null;
+
+        if (!alreadyHydrated) {
             const seats = getOrCreateSeats(canonicalRoomId);
-            for (let i = 0; i < Math.min(SEAT_COUNT, parsed.seats.length); i++) {
-                const src = parsed.seats[i];
-                if (!src) continue;
-                seats[i] = {
-                    ...createEmptySeat(i),
-                    ...src,
-                    seatIndex: i
-                };
+            if (parsed && Array.isArray(parsed.seats)) {
+                for (let i = 0; i < Math.min(SEAT_COUNT, parsed.seats.length); i++) {
+                    const src = parsed.seats[i];
+                    if (!src) continue;
+                    seats[i] = {
+                        ...createEmptySeat(i),
+                        ...src,
+                        seatIndex: i
+                    };
+                }
+            }
+            if (locksHash && typeof locksHash === 'object') {
+                for (const [idxStr, val] of Object.entries(locksHash)) {
+                    const idx = Number(idxStr);
+                    if (!Number.isNaN(idx) && idx >= 0 && idx < SEAT_COUNT && seats[idx]) {
+                        if (val === '1' || val === 'true') seats[idx].isLocked = true;
+                        else if (val === '0' || val === 'false') seats[idx].isLocked = false;
+                    }
+                }
             }
             sanitizeSeats(seats);
+            if (parsed || (locksHash && Object.keys(locksHash).length > 0)) {
+                cacheService.roomHydratedSet.add(canonicalRoomId);
+            }
         }
 
-        if (Array.isArray(parsed.participants) && existingParticipants.size === 0) {
+        const resolvedCap = capRaw !== null
+            ? normalizeStageCapacity(capRaw, 0)
+            : (parsed?.speakerSlots ? normalizeStageCapacity(parsed.speakerSlots, 0) : 0);
+        if (resolvedCap > 0 && !cacheService.roomSpeakerSlotsMap.has(canonicalRoomId)) {
+            cacheService.setRoomSpeakerSlots(canonicalRoomId, resolvedCap);
+        }
+
+        if (parsed && Array.isArray(parsed.participants) && existingParticipants.size === 0) {
             for (const p of parsed.participants) {
                 if (p && p.userId && p.userId !== 'null' && p.userId !== 'undefined') {
                     existingParticipants.set(String(p.userId).trim(), p);
@@ -118,6 +191,7 @@ function persistStateToRedisAsync(canonicalRoomId, roomMeta = null) {
 
     try {
         const seats = getOrCreateSeats(canonicalRoomId);
+        const speakerSlots = getSpeakerSlots(canonicalRoomId);
         const participantsMap = getParticipantsMap(canonicalRoomId);
         const participants = Array.from(participantsMap.values());
         const onlineCount = participants.length;
@@ -128,6 +202,8 @@ function persistStateToRedisAsync(canonicalRoomId, roomMeta = null) {
             ownerUid: roomMeta?.ownerUid || '',
             coOwners: roomMeta?.coOwners || [],
             admins: roomMeta?.admins || [],
+            speakerSlots,
+            stateVersion: cacheService.getRoomStateVersion(canonicalRoomId),
             seats,
             participants,
             onlineCount,
@@ -183,7 +259,10 @@ function updateParticipantSeatState(canonicalRoomId, identifiers, onSeat, seatIn
 }
 
 function buildRoomSnapshot(canonicalRoomId, roomDoc = null, roomMeta = null) {
-    const seats = hydrateSeats(canonicalRoomId, roomDoc?.seats);
+    const docCapacity = normalizeStageCapacity(roomDoc?.speakerSlots, DEFAULT_STAGE_CAPACITY);
+    const seats = hydrateSeats(canonicalRoomId, roomDoc?.seats, roomDoc?.lockedSeats, docCapacity);
+    const speakerSlots = getSpeakerSlots(canonicalRoomId, docCapacity);
+    const lockedSeats = seats.filter((s) => Boolean(s?.isLocked)).map((s) => s.seatIndex);
     const participantsMap = getParticipantsMap(canonicalRoomId);
     const participants = Array.from(participantsMap.values());
     const onlineCount = participants.length;
@@ -200,6 +279,9 @@ function buildRoomSnapshot(canonicalRoomId, roomDoc = null, roomMeta = null) {
         announcement: roomDoc?.announcement || 'Welcome!',
         roomPhotoUrl: roomDoc?.roomPhotoUrl || roomDoc?.roomCover || '',
         backgroundUrl: roomDoc?.backgroundUrl || '',
+        speakerSlots,
+        lockedSeats,
+        stateVersion: cacheService.getRoomStateVersion(canonicalRoomId),
         seats,
         participants,
         onlineCount,
@@ -214,7 +296,11 @@ module.exports = {
     sanitizeSeats,
     getOrCreateSeats,
     hydrateSeats,
+    getSpeakerSlots,
+    setSpeakerSlots,
     getParticipantsMap,
+    persistSeatLockToRedisAsync,
+    persistCapacityToRedisAsync,
     hydrateFromRedisIfEmpty,
     persistStateToRedisAsync,
     computeRoomHeat,
