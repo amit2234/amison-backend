@@ -48,6 +48,7 @@ const roomSchema = new mongoose.Schema({
             gender: { type: String, default: "Male" },
             isLocked: { type: Boolean, default: false },
             isMuted: { type: Boolean, default: false },
+            isMicTurnedOff: { type: Boolean, default: false },
             isSpeaking: { type: Boolean, default: false },
             seatLabel: { type: String, default: "" }
         }],
@@ -64,6 +65,7 @@ const roomSchema = new mongoose.Schema({
             gender: "Male",
             isLocked: false,
             isMuted: false,
+            isMicTurnedOff: false,
             isSpeaking: false,
             seatLabel: (i + 1).toString()
         }))
