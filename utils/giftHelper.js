@@ -6,26 +6,45 @@ const { uploadBufferToCloudinary, detectMediaMagicBytes } = require('../services
 function resolveAnimationType(animUrl, iconUrl) {
     const combined = `${animUrl || ''} ${iconUrl || ''}`.toLowerCase();
     if (combined.includes('.svga')) return 'SVGA_ANIMATION';
+    if (combined.includes('.pag')) return 'PAG_ANIMATION';
+    if (combined.includes('.lottie') || combined.includes('.json')) return 'LOTTIE_ANIMATION';
     if (combined.includes('.gif')) return 'GIF_ANIMATION';
     if (combined.includes('.svg')) return 'SVG_ANIMATION';
     if (combined.includes('.webp')) return 'CUSTOM_MEDIA';
     return 'CUSTOM_MEDIA';
 }
 
+function buildCleanAssetFilename(prefix, originalname, ext) {
+    const base = String(originalname || prefix)
+        .replace(/\.[^/.]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '_')
+        .toLowerCase() || prefix;
+    return `${base}_${Date.now()}.${ext}`;
+}
+
 /**
- * Handles multipart file uploads (thumbnail icon & SVGA animation) to Cloudinary
+ * Handles multipart file uploads (thumbnail icon & animation) to Cloudinary
  */
 async function processGiftMediaUploads(files = {}, existingIcon = '', existingAnim = '') {
     let finalIconUrl = existingIcon;
     let finalAnimUrl = existingAnim;
 
     if (files && files.iconFile && files.iconFile[0]) {
-        const iconBuf = files.iconFile[0].buffer;
+        const iconFile = files.iconFile[0];
+        const iconBuf = iconFile.buffer;
+        const iconOrigName = iconFile.originalname || `icon_${Date.now()}`;
+        const detectedIcon = detectMediaMagicBytes(iconBuf, iconOrigName);
+        const iconExt = detectedIcon?.ext || (iconOrigName.includes('.') ? iconOrigName.split('.').pop().toLowerCase() : 'png');
+        const iconResType = detectedIcon ? detectedIcon.resourceType : (['svga', 'pag', 'json', 'lottie'].includes(iconExt) ? 'raw' : 'image');
+
         const iconUpload = await uploadBufferToCloudinary(
             iconBuf,
             'amison/gifts/thumbnails',
-            'image',
-            { filename: files.iconFile[0].originalname || `icon_${Date.now()}` }
+            iconResType,
+            {
+                filename: buildCleanAssetFilename('icon', iconOrigName, iconExt),
+                originalname: iconOrigName
+            }
         );
         if (iconUpload && iconUpload.secure_url) {
             finalIconUrl = iconUpload.secure_url;
@@ -33,19 +52,30 @@ async function processGiftMediaUploads(files = {}, existingIcon = '', existingAn
     }
 
     if (files && files.animFile && files.animFile[0]) {
-        const animBuf = files.animFile[0].buffer;
-        const detected = detectMediaMagicBytes(animBuf);
-        const isSvga = (detected && detected.ext === 'svga') ||
-            (files.animFile[0].originalname && files.animFile[0].originalname.toLowerCase().endsWith('.svga'));
+        const animFile = files.animFile[0];
+        const animBuf = animFile.buffer;
+        const animOrigName = animFile.originalname || `anim_${Date.now()}`;
+        const detectedAnim = detectMediaMagicBytes(animBuf, animOrigName);
+        const animExt = detectedAnim?.ext || (animOrigName.includes('.') ? animOrigName.split('.').pop().toLowerCase() : 'svga');
+        const isRawAnim = ['svga', 'pag', 'json', 'lottie'].includes(animExt);
+        const animResType = isRawAnim ? 'raw' : (detectedAnim ? detectedAnim.resourceType : 'auto');
 
         const animUpload = await uploadBufferToCloudinary(
             animBuf,
             'amison/gifts/animations',
-            isSvga ? 'raw' : (detected ? detected.resourceType : 'auto'),
-            { filename: files.animFile[0].originalname || `anim_${Date.now()}.${isSvga ? 'svga' : (detected ? detected.ext : 'dat')}` }
+            animResType,
+            {
+                filename: buildCleanAssetFilename('anim', animOrigName, animExt),
+                originalname: animOrigName
+            }
         );
         if (animUpload && animUpload.secure_url) {
             finalAnimUrl = animUpload.secure_url;
+            if (isRawAnim && !finalAnimUrl.toLowerCase().includes(`.${animExt}`)) {
+                finalAnimUrl = finalAnimUrl.includes('?')
+                    ? finalAnimUrl.replace('?', `.${animExt}?`)
+                    : `${finalAnimUrl}.${animExt}`;
+            }
         }
     }
 
