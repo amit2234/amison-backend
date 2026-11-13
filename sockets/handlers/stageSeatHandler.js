@@ -73,10 +73,20 @@ const stageSeatHandler = {
                     return;
                 }
 
-                // Zero-Trust Rule 3: If user was on another seat, vacate that seat first
+                // Zero-Trust Rule 3: If user was on another seat, flush mic time & vacate that seat first
                 seats.forEach((otherSeat, otherIdx) => {
                     if (otherIdx !== seatIndex && otherSeat && String(otherSeat.userId || '').trim() === targetUserId) {
+                        if (otherSeat.seatedAt) {
+                            const elapsedSec = Math.round((Date.now() - otherSeat.seatedAt) / 1000);
+                            if (elapsedSec > 5) {
+                                try {
+                                    const DailyTaskService = require('../../services/dailyTaskService');
+                                    DailyTaskService.recordMicTime(otherSeat.userId, elapsedSec);
+                                } catch (_) {}
+                            }
+                        }
                         otherSeat.userId = null;
+                        otherSeat.seatedAt = null;
                         otherSeat.userName = null;
                         otherSeat.userAvatar = null;
                         otherSeat.userCustomId = '';
@@ -200,8 +210,18 @@ const stageSeatHandler = {
             let kickedUserId = null;
 
             if (isLocked && seat.userId) {
+                if (seat.seatedAt) {
+                    const elapsedSec = Math.round((Date.now() - seat.seatedAt) / 1000);
+                    if (elapsedSec > 5) {
+                        try {
+                            const DailyTaskService = require('../../services/dailyTaskService');
+                            DailyTaskService.recordMicTime(seat.userId, elapsedSec);
+                        } catch (_) {}
+                    }
+                }
                 kickedUserId = seat.userId;
                 seat.userId = null;
+                seat.seatedAt = null;
                 seat.userName = null;
                 seat.userAvatar = null;
             }
