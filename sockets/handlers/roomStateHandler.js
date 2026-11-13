@@ -69,6 +69,9 @@ const roomStateHandler = {
 
         if (!userName || userName === 'null' || userName === 'undefined') userName = 'User';
 
+        // Register client socket to canonical channel with full user metadata
+        roomChannelManager.joinRoomChannel(canonicalRoomId, canonicalUserId, ws, userName, userNumericId);
+
         const currentSeats = cacheService.getOrCreateRoomSeats(canonicalRoomId);
         const existingSeatIndex = currentSeats.findIndex(s => s && s.userId && s.userId !== 'null' && (String(s.userId).trim() === canonicalUserId || String(s.userId).trim() === userId));
         const isOnSeat = existingSeatIndex >= 0;
@@ -140,22 +143,89 @@ const roomStateHandler = {
     },
 
     async handleLeaveRoom(data, ws, wss, broadcastPopularRooms) {
-        const meta = roomChannelManager.getMetadata(ws);
-        const roomId = String(data.roomId || meta?.canonicalRoomId || meta?.roomId || '').trim();
+        const meta = (ws && typeof roomChannelManager.getMetadata === 'function' ? roomChannelManager.getMetadata(ws) : null) || {};
+        const roomId = String(data.roomId || data.canonicalRoomId || meta?.canonicalRoomId || meta?.roomId || '').trim();
         const userId = String(data.userId || meta?.userId || '').trim();
+        const userCustomId = String(data.userCustomId || meta?.userCustomId || '').trim();
+        const userName = String(data.userName || meta?.userName || '').trim();
 
-        if (!roomId || !userId) return;
+        if (!roomId && !meta?.roomId) return;
+        const targetRoom = roomId || meta?.roomId;
 
-        const canonicalRoomId = roomChannelManager.getCanonicalId(roomId) || roomId;
-        roomChannelManager.leaveRoomChannel(canonicalRoomId, ws);
+        const canonicalRoomId = roomChannelManager.getCanonicalId(targetRoom) || targetRoom;
+        if (ws) {
+            roomChannelManager.leaveRoomChannel(canonicalRoomId, ws);
+            if (targetRoom !== canonicalRoomId) {
+                roomChannelManager.leaveRoomChannel(targetRoom, ws);
+            }
+        }
 
-        // Automatically clear any seat occupied by the leaving/disconnecting user
+        // Collect all possible identifiers for this leaving user (Auth UID, numericId, display ID, etc.)
+        const leavingIdentifiers = new Set();
+        if (userId && userId !== 'null' && userId !== 'undefined') {
+            leavingIdentifiers.add(userId);
+        }
+        if (userCustomId && userCustomId !== 'null' && userCustomId !== 'undefined') {
+            leavingIdentifiers.add(userCustomId);
+        }
+        if (meta?.userId && meta.userId !== 'null') {
+            leavingIdentifiers.add(meta.userId);
+        }
+        if (meta?.userCustomId && meta.userCustomId !== 'null') {
+            leavingIdentifiers.add(meta.userCustomId);
+        }
+
+        let resolvedUserDoc = null;
+        try {
+            const queryConditions = [];
+            if (userId && userId !== 'null') {
+                queryConditions.push({ uid: userId });
+                const parsed = parseInt(userId);
+                if (!isNaN(parsed) && parsed > 0) queryConditions.push({ numericId: parsed });
+            }
+            if (userCustomId && userCustomId !== 'null') {
+                const parsedCustom = parseInt(userCustomId);
+                if (!isNaN(parsedCustom) && parsedCustom > 0) queryConditions.push({ numericId: parsedCustom });
+            }
+            if (queryConditions.length > 0) {
+                resolvedUserDoc = await User.findOne({ $or: queryConditions }).lean();
+                if (resolvedUserDoc) {
+                    if (resolvedUserDoc.uid) leavingIdentifiers.add(String(resolvedUserDoc.uid).trim());
+                    if (resolvedUserDoc.numericId) leavingIdentifiers.add(String(resolvedUserDoc.numericId).trim());
+                }
+            }
+        } catch (_) {}
+
+        const leavingName = (userName || resolvedUserDoc?.name || meta?.userName || '').trim().toLowerCase();
+
+        // Automatically clear any seat occupied by the leaving/disconnecting user across ALL alias IDs
         const seats = cacheService.getOrCreateRoomSeats(canonicalRoomId);
         seats.forEach((seat, idx) => {
-            if (seat.userId === userId) {
+            if (!seat) return;
+            const seatUid = String(seat.userId || '').trim();
+            const seatCustom = String(seat.userCustomId || '').trim();
+            const seatName = String(seat.userName || '').trim().toLowerCase();
+
+            const isOccupantLeaving = (seatUid && leavingIdentifiers.has(seatUid)) ||
+                                      (seatCustom && leavingIdentifiers.has(seatCustom)) ||
+                                      (leavingName && seatName && leavingName === seatName && leavingName !== 'user');
+
+            if (isOccupantLeaving) {
+                if (seat.seatedAt && seat.userId) {
+                    const elapsedSec = Math.round((Date.now() - seat.seatedAt) / 1000);
+                    if (elapsedSec > 5) {
+                        try {
+                            const DailyTaskService = require('../../services/dailyTaskService');
+                            DailyTaskService.recordMicTime(seat.userId, elapsedSec);
+                        } catch (_) {}
+                    }
+                }
                 seat.userId = null;
+                seat.seatedAt = null;
                 seat.userName = null;
                 seat.userAvatar = null;
+                seat.userCustomId = '';
+                seat.isSpeaking = false;
                 const updatePacket = {
                     type: 'seat:update',
                     roomId: canonicalRoomId,
@@ -163,28 +233,26 @@ const roomStateHandler = {
                     userId: '',
                     userName: '',
                     userAvatar: '',
-                    isLocked: seat.isLocked,
-                    isMuted: seat.isMuted
+                    userCustomId: '',
+                    isSpeaking: false,
+                    isLocked: Boolean(seat.isLocked),
+                    isMuted: Boolean(seat.isMuted)
                 };
                 roomChannelManager.broadcastToRoom(canonicalRoomId, updatePacket);
-                if (canonicalRoomId !== roomId) {
-                    roomChannelManager.broadcastToRoom(roomId, updatePacket);
+                if (canonicalRoomId !== targetRoom) {
+                    roomChannelManager.broadcastToRoom(targetRoom, updatePacket);
                 }
                 Room.updateOne(
-                    { $or: [{ roomId: canonicalRoomId }, { ownerUid: canonicalRoomId }, { displayRoomId: canonicalRoomId }] },
+                    { $or: [{ roomId: canonicalRoomId }, { ownerUid: canonicalRoomId }, { displayRoomId: canonicalRoomId }, { displayRoomId: targetRoom }] },
                     { $set: { [`seats.${idx}`]: seat, updatedAt: new Date() } }
                 ).catch(() => {});
             }
         });
 
         const roomParticipants = cacheService.getRoomParticipants(canonicalRoomId);
-        roomParticipants.delete(userId);
-        try {
-            const userDoc = await User.findOne({ $or: [{ uid: userId }, { numericId: parseInt(userId) || 0 }] }).lean();
-            if (userDoc && userDoc.uid) {
-                roomParticipants.delete(userDoc.uid);
-            }
-        } catch (_) {}
+        leavingIdentifiers.forEach(id => roomParticipants.delete(id));
+        if (userId) roomParticipants.delete(userId);
+        if (resolvedUserDoc && resolvedUserDoc.uid) roomParticipants.delete(resolvedUserDoc.uid);
 
         const onlineCount = roomParticipants.size;
         const remainingSeats = cacheService.getOrCreateRoomSeats(canonicalRoomId);
@@ -193,7 +261,7 @@ const roomStateHandler = {
         const isLive = onlineCount > 0 && heatScore >= 10;
 
         Room.updateOne(
-            { $or: [{ roomId: canonicalRoomId }, { ownerUid: canonicalRoomId }, { displayRoomId: canonicalRoomId }] },
+            { $or: [{ roomId: canonicalRoomId }, { ownerUid: canonicalRoomId }, { displayRoomId: canonicalRoomId }, { displayRoomId: targetRoom }] },
             { $set: { isLive, heatScore, onlineCount, updatedAt: new Date() } }
         ).catch(() => {});
 
@@ -215,9 +283,9 @@ const roomStateHandler = {
         };
         roomChannelManager.broadcastToRoom(canonicalRoomId, statePacket);
         roomChannelManager.broadcastToRoom(canonicalRoomId, leavePacket);
-        if (canonicalRoomId !== roomId) {
-            roomChannelManager.broadcastToRoom(roomId, statePacket);
-            roomChannelManager.broadcastToRoom(roomId, leavePacket);
+        if (canonicalRoomId !== targetRoom) {
+            roomChannelManager.broadcastToRoom(targetRoom, statePacket);
+            roomChannelManager.broadcastToRoom(targetRoom, leavePacket);
         }
 
         if (typeof broadcastPopularRooms === 'function') {
