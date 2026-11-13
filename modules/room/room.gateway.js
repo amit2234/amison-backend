@@ -5,6 +5,7 @@ const { channelManager } = require('./room.channel.manager');
 const roomLifecycleActivity = require('./activities/roomLifecycle.activity');
 const roomStageSeatsActivity = require('./activities/roomStageSeats.activity');
 const roomSeatLockActivity = require('./activities/roomSeatLock.activity');
+const roomStageCapacityActivity = require('./activities/roomStageCapacity.activity');
 const roomChatActivity = require('./activities/roomChat.activity');
 const roomGiftActivity = require('./activities/roomGift.activity');
 const roomModerationActivity = require('./activities/roomModeration.activity');
@@ -232,6 +233,16 @@ function setupRoomSocket(server) {
                     await runIsolatedActivity(ACTIVITY_NAMES.SEAT_LOCK, ws, () => (
                         roomSeatLockActivity.handleToggleSeatLock(data, ws, triggerPopularBroadcast)
                     ), roomIdHint, seatIdxHint);
+                    break;
+
+                // Dedicated Stage Capacity (Number of Mics: 4/8/12/16) Activity (Owner & Co-Owner only)
+                case 'room:stage_capacity':
+                case 'stage_capacity:update':
+                case 'stage_capacity:set':
+                case 'update_stage_capacity':
+                    await runIsolatedActivity(ACTIVITY_NAMES.STAGE_CAPACITY, ws, () => (
+                        roomStageCapacityActivity.handleSetStageCapacity(data, ws, triggerPopularBroadcast)
+                    ), roomIdHint);
                     break;
 
                 // Live Mic State & Seat Emoji Reactions
