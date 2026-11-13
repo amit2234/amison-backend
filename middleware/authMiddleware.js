@@ -2,7 +2,8 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const jwt = require('jsonwebtoken');
-const { admin, auth, isFirebaseInitialized } = require('../firebase');
+const { auth, isFirebaseInitialized } = require('../firebase');
+const User = require('../models/User');
 const NewopAuthService = require('../services/newopAuthService');
 
 // Resolve Firebase Project ID from environment or bundled google-services.json
@@ -57,14 +58,26 @@ async function verifyFirebaseIdTokenCryptographically(token) {
     if (!token || typeof token !== 'string') {
         throw new Error('Missing Firebase ID token');
     }
+    const cleanToken = token.trim();
+    if (!cleanToken) {
+        throw new Error('Empty Firebase ID token');
+    }
 
     // Primary path: Firebase Admin SDK (if service account is configured)
     if (isFirebaseInitialized() && auth) {
-        return await auth.verifyIdToken(token);
+        const decoded = await auth.verifyIdToken(cleanToken);
+        const uid = String(decoded?.uid || decoded?.sub || '').trim();
+        if (!uid) {
+            throw new Error('Firebase token missing UID');
+        }
+        return {
+            ...decoded,
+            uid
+        };
     }
 
     // Secondary path: Cryptographic RS256 verification against Google's official x509 public certificates
-    const decodedComplete = jwt.decode(token, { complete: true });
+    const decodedComplete = jwt.decode(cleanToken, { complete: true });
     if (!decodedComplete || !decodedComplete.header || decodedComplete.header.alg !== 'RS256' || !decodedComplete.header.kid) {
         throw new Error('Malformed Firebase ID token header');
     }
@@ -81,7 +94,7 @@ async function verifyFirebaseIdTokenCryptographically(token) {
         throw new Error('Unknown Firebase token signing key (kid)');
     }
 
-    const payload = jwt.verify(token, certPem, {
+    const payload = jwt.verify(cleanToken, certPem, {
         algorithms: ['RS256'],
         audience: FIREBASE_PROJECT_ID,
         issuer: `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`
@@ -102,16 +115,21 @@ async function verifyFirebaseIdTokenCryptographically(token) {
     };
 }
 
+function extractBearerToken(req) {
+    const authHeader = String(req?.headers?.['authorization'] || '').trim();
+    if (authHeader.toLowerCase().startsWith('bearer ')) {
+        return authHeader.slice(7).trim();
+    }
+    return '';
+}
+
 /**
- * 100% Zero-Trust Strict Auth Middleware (No header/body UID spoofing allowed).
+ * 100% Zero-Trust Strict Auth Middleware (No header/body/query UID spoofing allowed).
  * Requires a valid, cryptographically signed Firebase Auth Bearer token.
  */
 async function verifyStrictFirebaseToken(req, res, next) {
     try {
-        const authHeader = req.headers['authorization'];
-        const token = (authHeader && authHeader.startsWith('Bearer '))
-            ? authHeader.slice(7).trim()
-            : '';
+        const token = extractBearerToken(req);
 
         if (!token) {
             return res.status(401).json({
@@ -130,6 +148,7 @@ async function verifyStrictFirebaseToken(req, res, next) {
         }
 
         req.user = decodedToken;
+        req.verifiedUid = verifiedUid;
         req.callerUid = verifiedUid;
         return next();
     } catch (tokenErr) {
@@ -142,151 +161,148 @@ async function verifyStrictFirebaseToken(req, res, next) {
 }
 
 /**
- * Zero-Trust Auth Middleware for General User APIs.
- * Verifies Firebase ID Token cryptographically or extracts caller UID.
- * Rejects unauthorized requests with 401 Unauthorized or 403 Forbidden.
+ * Verifies that the cryptographically authenticated Firebase UID belongs to
+ * an active, registered, non-banned user inside MongoDB `users`.
  */
-async function verifyAuthToken(req, res, next) {
+async function requireRegisteredMongoUser(req, res, next) {
     try {
-        const authHeader = req.headers['authorization'];
-        let token = null;
-
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            token = authHeader.split('Bearer ')[1].trim();
+        const verifiedUid = String(req.callerUid || req.verifiedUid || '').trim();
+        if (!verifiedUid) {
+            return res.status(401).json({
+                success: false,
+                error: 'Unauthorized: Verified Firebase UID missing.'
+            });
         }
 
-        // 1. Cryptographically verify ID Token if Bearer token is provided
-        if (token) {
-            try {
-                const decodedToken = await verifyFirebaseIdTokenCryptographically(token);
-                req.user = decodedToken;
-                req.callerUid = String(decodedToken.uid || decodedToken.sub).trim();
-                return next();
-            } catch (tokenErr) {
-                console.warn('⚠️ [Zero-Trust Auth] Firebase ID Token verification failed:', tokenErr.message);
-                return res.status(401).json({
-                    success: false,
-                    error: 'Unauthorized: Invalid or expired Firebase ID token.'
-                });
-            }
+        const userDoc = await User.findOne({ uid: verifiedUid })
+            .select('uid numericId name avatarUrl role isBanned isSeller isMerchant')
+            .lean();
+
+        if (!userDoc) {
+            return res.status(403).json({
+                success: false,
+                error: 'Forbidden: User account is not registered in this application.'
+            });
         }
 
-        // 2. Fallback to X-User-UID header if provided (legacy handshake)
-        const headerUid = req.headers['x-user-uid'] || req.headers['x-caller-uid'];
-        if (headerUid) {
-            req.callerUid = String(headerUid).trim();
-            req.user = { uid: req.callerUid };
-            return next();
+        if (userDoc.isBanned) {
+            return res.status(403).json({
+                success: false,
+                error: 'Forbidden: Your account has been suspended or banned.'
+            });
         }
 
-        // 3. Fallback to body/query UID if present
-        const fallbackUid = req.body?.callerUid || req.body?.uid || req.query?.callerUid || req.query?.uid;
-        if (fallbackUid) {
-            req.callerUid = String(fallbackUid).trim();
-            req.user = { uid: req.callerUid };
-            return next();
-        }
-
-        return res.status(401).json({
+        req.authUser = userDoc;
+        req.verifiedUid = userDoc.uid;
+        req.callerUid = userDoc.uid;
+        return next();
+    } catch (err) {
+        console.error('❌ [Mongo User Auth] Verification error:', err.message);
+        return res.status(500).json({
             success: false,
-            error: 'Access denied: Authentication token or UID required.'
+            error: 'Internal user verification error.'
         });
-    } catch (e) {
-        console.error('❌ [Zero-Trust Auth] Middleware Error:', e);
-        res.status(500).json({ success: false, error: 'Internal security authentication error' });
     }
 }
 
 /**
- * Zero-Trust Auth Middleware for Newop Admin APIs.
- * Verifies caller UID and enforces Newop Admin Master permissions.
+ * Combined Strict Auth Gate:
+ * 1) Cryptographically verifies Firebase ID Token
+ * 2) Confirms user exists & is not banned in MongoDB `users`
  */
-async function requireNewopAdmin(req, res, next) {
-    try {
-        const authHeader = req.headers['authorization'];
-        let token = null;
-
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            token = authHeader.split('Bearer ')[1].trim();
-        }
-
-        let callerUid = null;
-
-        // 1. Verify ID Token cryptographically if present
-        if (token) {
-            try {
-                const decodedToken = await verifyFirebaseIdTokenCryptographically(token);
-                req.user = decodedToken;
-                callerUid = String(decodedToken.uid || decodedToken.sub).trim();
-            } catch (tokenErr) {
-                console.warn('⚠️ [Newop Auth] Token verification failed:', tokenErr.message);
-                return res.status(401).json({
-                    success: false,
-                    error: 'Unauthorized: Invalid or expired Firebase ID token.'
-                });
-            }
-        }
-
-        // 2. Fallback to headers / body / query callerUid
-        if (!callerUid) {
-            callerUid = req.headers['x-user-uid'] ||
-                req.headers['x-caller-uid'] ||
-                req.body?.callerUid ||
-                req.query?.callerUid;
-        }
-
-        if (!callerUid) {
-            return res.status(403).json({
-                success: false,
-                error: 'Access denied: UID or Bearer token missing. Newop is strictly locked from backend.'
-            });
-        }
-
-        const cleanUid = String(callerUid).trim();
-
-        // 3. Check against authorized Newop Admin UIDs database / whitelist
-        const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(cleanUid);
-        if (!isAuth) {
-            return res.status(403).json({
-                success: false,
-                error: 'Access denied: This user UID does not have backend permissions for Newop.'
-            });
-        }
-
-        req.callerUid = cleanUid;
-        next();
-    } catch (e) {
-        console.error('❌ [Newop Auth] requireNewopAdmin error:', e);
-        res.status(500).json({ success: false, error: 'Internal server authorization error' });
-    }
+function verifyAuthenticatedUser(req, res, next) {
+    return verifyStrictFirebaseToken(req, res, () => requireRegisteredMongoUser(req, res, next));
 }
 
-async function extractVerifiedUidOptional(req, res, next) {
-    try {
-        const authHeader = req.headers['authorization'];
-        if (authHeader && authHeader.startsWith('Bearer ')) {
-            const token = authHeader.slice(7).trim();
-            if (token) {
-                const decoded = await verifyFirebaseIdTokenCryptographically(token);
-                req.user = decoded;
-                req.verifiedUid = String(decoded.uid || decoded.sub || '').trim();
-                req.callerUid = req.verifiedUid;
+/**
+ * Strict Auth Middleware for General User APIs (legacy alias with zero UID fallbacks).
+ */
+function verifyAuthToken(req, res, next) {
+    return verifyAuthenticatedUser(req, res, next);
+}
+
+/**
+ * Zero-Trust Auth Middleware for Newop Admin APIs.
+ * Verifies Firebase ID Token + MongoDB user status + Newop Admin Master whitelist.
+ */
+function requireNewopAdmin(req, res, next) {
+    return verifyStrictFirebaseToken(req, res, () => {
+        return requireRegisteredMongoUser(req, res, async () => {
+            try {
+                const cleanUid = String(req.callerUid || '').trim();
+                const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(cleanUid);
+                if (!isAuth) {
+                    return res.status(403).json({
+                        success: false,
+                        error: 'Access denied: This user UID does not have backend permissions for Newop.'
+                    });
+                }
+                return next();
+            } catch (e) {
+                console.error('❌ [Newop Auth] requireNewopAdmin error:', e);
+                return res.status(500).json({ success: false, error: 'Internal server authorization error' });
             }
-        }
-        return next();
-    } catch (err) {
-        return res.status(401).json({
-            success: false,
-            error: 'Unauthorized: Invalid or expired Firebase ID token.'
         });
+    });
+}
+
+/**
+ * Verifies WebSocket upgrade requests (Authorization: Bearer <token> or ?token=<token>).
+ * Enforces Firebase ID Token + active non-banned MongoDB user record.
+ */
+async function verifyWebSocketConnection(req, options = {}) {
+    const { requireMongoUser = true } = options;
+    const urlObj = new URL(req.url || '/', 'http://localhost');
+    const headerToken = extractBearerToken(req);
+    const queryToken = String(urlObj.searchParams.get('token') || '').trim();
+    const rawToken = headerToken || queryToken;
+
+    if (!rawToken) {
+        const err = new Error('Unauthorized: Missing Firebase ID token');
+        err.statusCode = 401;
+        throw err;
     }
+
+    const decoded = await verifyFirebaseIdTokenCryptographically(rawToken);
+    const verifiedUid = String(decoded?.uid || decoded?.sub || '').trim();
+    if (!verifiedUid) {
+        const err = new Error('Unauthorized: Token missing verified UID');
+        err.statusCode = 401;
+        throw err;
+    }
+
+    let userDoc = null;
+    if (requireMongoUser) {
+        userDoc = await User.findOne({ uid: verifiedUid })
+            .select('uid numericId name avatarUrl coins role isBanned')
+            .lean();
+        if (!userDoc) {
+            const err = new Error('Forbidden: User account not registered');
+            err.statusCode = 403;
+            throw err;
+        }
+        if (userDoc.isBanned) {
+            const err = new Error('Forbidden: Account is banned');
+            err.statusCode = 403;
+            throw err;
+        }
+    }
+
+    return {
+        verifiedUid,
+        decoded,
+        userDoc
+    };
 }
 
 module.exports = {
     verifyFirebaseIdTokenCryptographically,
-    extractVerifiedUidOptional,
+    extractBearerToken,
     verifyStrictFirebaseToken,
+    requireRegisteredMongoUser,
+    verifyAuthenticatedUser,
+    extractVerifiedUidOptional: verifyAuthenticatedUser,
     verifyAuthToken,
-    requireNewopAdmin
+    requireNewopAdmin,
+    verifyWebSocketConnection
 };
-
