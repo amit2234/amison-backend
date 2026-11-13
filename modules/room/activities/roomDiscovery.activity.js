@@ -1,6 +1,6 @@
 const Room = require('../../../models/Room');
 const User = require('../../../models/User');
-const { POPULAR_ROOMS_THROTTLE_MS } = require('../room.constants');
+const { POPULAR_ROOMS_THROTTLE_MS, normalizeStageCapacity } = require('../room.constants');
 const { resolveTrueOwnerUid } = require('../room.channel.manager');
 
 let localMemoryRoomsCache = null;
@@ -99,7 +99,7 @@ const roomDiscoveryActivity = {
                 backgroundUrl: r.backgroundUrl || '',
                 participantCount: liveCount,
                 onlineCount: liveCount,
-                speakerSlots: 16,
+                speakerSlots: normalizeStageCapacity(r.speakerSlots),
                 tags: r.category || '#Chill,#Talk,#Hindi',
                 roomHeat: heat,
                 isLive: (liveCount > 0 && heat >= 10 && !r.isBlocked)
@@ -164,7 +164,7 @@ const roomDiscoveryActivity = {
                 backgroundUrl: r.backgroundUrl || '',
                 participantCount: Number(r.onlineCount || 0),
                 onlineCount: Number(r.onlineCount || 0),
-                speakerSlots: 16,
+                speakerSlots: normalizeStageCapacity(r.speakerSlots),
                 tags: r.category || '#Chill,#Talk,#Hindi',
                 roomHeat: Number(r.heatScore || 0),
                 isLive: Boolean(r.isLive)
