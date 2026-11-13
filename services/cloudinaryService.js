@@ -45,6 +45,10 @@ function detectMediaMagicBytes(buffer) {
             return { ext: 'webp', mime: 'image/webp', resourceType: 'image', isAnimated: true };
         }
     }
+    // JPEG: FF D8 FF
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+        return { ext: 'jpg', mime: 'image/jpeg', resourceType: 'image', isAnimated: false };
+    }
     return null;
 }
 
