@@ -68,12 +68,8 @@ app.use('/api/store', storeRoutes);
 let newopStoreRoutesModule;
 try {
     newopStoreRoutesModule = require('./models/newop/store/newopStoreRoutes');
-} catch (e1) {
-    try {
-        newopStoreRoutesModule = require('./modules/newop/store/newopStoreRoutes');
-    } catch (e2) {
-        console.warn('⚠️ [Server] newopStoreRoutes module not found:', e2.message);
-    }
+} catch (e) {
+    console.warn('⚠️ [Server] newopStoreRoutes module not found:', e.message);
 }
 if (newopStoreRoutesModule) {
     app.use('/api/store/admin', newopStoreRoutesModule);
