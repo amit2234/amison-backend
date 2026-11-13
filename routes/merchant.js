@@ -1,8 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const MerchantController = require('../controllers/merchantController');
-
+const { verifyAuthenticatedUser } = require('../middleware/authMiddleware');
 const { idempotencyLockMiddleware } = require('../middleware/idempotency');
+
+router.use(verifyAuthenticatedUser);
 
 // In-App Merchant / Seller Endpoints (100% Zero-Trust Backend)
 router.get('/my-status/:userId', MerchantController.getMyStatus);

@@ -1,4 +1,3 @@
-
 /**
  * Backward-Compatible Facade for Modular Room Routes (/backend/modules/room/room.routes.js)
  */

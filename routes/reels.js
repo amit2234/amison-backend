@@ -5,6 +5,9 @@ const Reel = require('../models/Reel');
 const ReelLike = require('../models/ReelLike');
 const ReelComment = require('../models/ReelComment');
 const User = require('../models/User');
+const { verifyAuthenticatedUser } = require('../middleware/authMiddleware');
+
+router.use(verifyAuthenticatedUser);
 
 // Configure Cloudinary from env variables
 cloudinary.config({
@@ -136,7 +139,6 @@ router.post('/publish', async (req, res) => {
   try {
     const {
       reelId,
-      userUid,
       numericId,
       userName,
       userAvatar,
@@ -148,7 +150,8 @@ router.post('/publish', async (req, res) => {
       caption,
       hashtags,
       description
-    } = req.body;
+    } = req.body || {};
+    const userUid = String(req.callerUid || '').trim();
 
     if (!userUid || !videoHlsUrl) {
       return res.status(400).json({ success: false, error: 'Missing userUid or videoHlsUrl' });
@@ -190,7 +193,8 @@ router.post('/publish', async (req, res) => {
 // 5. TOGGLE LIKE REEL (/api/reels/like)
 router.post('/like', async (req, res) => {
   try {
-    const { reelId, userUid } = req.body;
+    const { reelId } = req.body || {};
+    const userUid = String(req.callerUid || '').trim();
 
     if (!reelId || !userUid) {
       return res.status(400).json({ success: false, error: 'Missing reelId or userUid' });
@@ -230,7 +234,8 @@ router.post('/like', async (req, res) => {
 // 6. POST A COMMENT (/api/reels/comment)
 router.post('/comment', async (req, res) => {
   try {
-    const { reelId, userUid, commentText, userName, userAvatar, numericId } = req.body;
+    const { reelId, commentText, userName, userAvatar, numericId } = req.body || {};
+    const userUid = String(req.callerUid || '').trim();
 
     if (!reelId || !userUid || !commentText) {
       return res.status(400).json({ success: false, error: 'Missing reelId, userUid, or commentText' });

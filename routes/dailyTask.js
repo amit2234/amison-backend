@@ -1,13 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const DailyTaskService = require('../services/dailyTaskService');
-const { verifyStrictFirebaseToken } = require('../middleware/authMiddleware');
+const { verifyAuthenticatedUser } = require('../middleware/authMiddleware');
 
 /**
  * GET /api/daily-task/status
  * Fetches authoritative Daily Task Points, 60m mic progress percentage, free spins, and real Wallet Gold Coins
  */
-router.get('/status', verifyStrictFirebaseToken, async (req, res) => {
+router.get('/status', verifyAuthenticatedUser, async (req, res) => {
     try {
         const uid = req.callerUid;
         const status = await DailyTaskService.getStatus(uid);
@@ -23,7 +23,7 @@ router.get('/status', verifyStrictFirebaseToken, async (req, res) => {
  * POST /api/daily-task/claim-login
  * Claims 200 - 500 Daily Points (once per IST day, 100% atomic)
  */
-router.post('/claim-login', verifyStrictFirebaseToken, async (req, res) => {
+router.post('/claim-login', verifyAuthenticatedUser, async (req, res) => {
     try {
         const uid = req.callerUid;
         const result = await DailyTaskService.claimDailyLogin(uid);
@@ -42,7 +42,7 @@ router.post('/claim-login', verifyStrictFirebaseToken, async (req, res) => {
  * POST /api/daily-task/claim-mic
  * Claims 500 - 1000 Daily Points once server-verified 60 minutes on mic are completed
  */
-router.post('/claim-mic', verifyStrictFirebaseToken, async (req, res) => {
+router.post('/claim-mic', verifyAuthenticatedUser, async (req, res) => {
     try {
         const uid = req.callerUid;
         const result = await DailyTaskService.claimMicTask(uid);
@@ -62,7 +62,7 @@ router.post('/claim-mic', verifyStrictFirebaseToken, async (req, res) => {
  * 100% Zero-Trust Atomic Wheel Spin:
  * Deducts 2000 Daily Points (or 1 Free Spin), rolls crypto RNG, and credits Gold Coins directly into User.coins
  */
-router.post('/spin', verifyStrictFirebaseToken, async (req, res) => {
+router.post('/spin', verifyAuthenticatedUser, async (req, res) => {
     try {
         const uid = req.callerUid;
         const clientTxId = req.body?.txId || req.headers['x-idempotency-key'] || '';
@@ -82,7 +82,7 @@ router.post('/spin', verifyStrictFirebaseToken, async (req, res) => {
  * POST /api/daily-task/heartbeat-mic
  * Zero-Trust mic heartbeat: Ignores client-sent seconds and flushes only genuine server-verified room seat time
  */
-router.post('/heartbeat-mic', verifyStrictFirebaseToken, async (req, res) => {
+router.post('/heartbeat-mic', verifyAuthenticatedUser, async (req, res) => {
     try {
         const uid = req.callerUid;
         const result = await DailyTaskService.heartbeatMicFromRoomSeat(uid);

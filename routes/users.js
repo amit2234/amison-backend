@@ -4,6 +4,12 @@ const User = require('../models/User');
 const Room = require('../models/Room');
 const RoomService = require('../services/roomService');
 const firebase = require('../firebase');
+const {
+    verifyFirebaseIdTokenCryptographically,
+    extractBearerToken,
+    verifyStrictFirebaseToken,
+    verifyAuthenticatedUser
+} = require('../middleware/authMiddleware');
 
 // ============================================================================
 // USER REST API ENDPOINTS (/api/users/* and /api/user/*)
@@ -96,72 +102,38 @@ async function handleSearchUsers(req, res) {
     }
 }
 
-router.get('/search', handleSearchUsers);
-router.get('/users/search', handleSearchUsers);
+router.get('/search', verifyAuthenticatedUser, handleSearchUsers);
+router.get('/users/search', verifyAuthenticatedUser, handleSearchUsers);
 
 // 3. POST /google-login - Authoritative 100% Backend Google Sign-In & Verification
 async function handleGoogleLogin(req, res) {
     try {
-        const { idToken, email: clientEmail, name, avatarUrl, dob, gender, country, firebaseUid } = req.body;
-        if (!idToken) {
-            return res.status(400).json({ success: false, error: 'idToken is required' });
+        const { idToken, email: clientEmail, name, avatarUrl, dob, gender, country } = req.body || {};
+        const rawToken = extractBearerToken(req) || String(idToken || '').trim();
+        if (!rawToken) {
+            return res.status(401).json({ success: false, error: 'Valid Firebase ID token is required' });
         }
 
-        let verifiedUid = null;
-        let verifiedEmail = null;
-        let tokenName = '';
-        let tokenPicture = '';
-        let googleSubUid = null;
-
-        // 1. Authoritative Firebase Admin Token Verification
-        if (firebase.isFirebaseInitialized() && firebase.admin) {
-            try {
-                const decodedToken = await firebase.admin.auth().verifyIdToken(idToken);
-                verifiedUid = decodedToken.uid;
-                verifiedEmail = decodedToken.email;
-                tokenName = decodedToken.name || '';
-                tokenPicture = decodedToken.picture || '';
-            } catch (tokenErr) {
-                console.warn('[Users Route] Strict verifyIdToken notice (' + tokenErr.message + '), checking decoded token claims...');
-                try {
-                    const jwt = require('jsonwebtoken');
-                    const decoded = jwt.decode(idToken);
-                    if (decoded && decoded.sub) {
-                        googleSubUid = String(decoded.sub).trim();
-                    }
-                    // Priority 1: Authentic Firebase Auth UID explicitly sent by Android FirebaseAuth
-                    if (firebaseUid && String(firebaseUid).trim().length > 5) {
-                        verifiedUid = String(firebaseUid).trim();
-                    } else if (decoded && decoded.user_id) {
-                        verifiedUid = decoded.user_id;
-                    } else if (decoded && decoded.sub) {
-                        verifiedUid = decoded.sub;
-                    } else {
-                        return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
-                    }
-                    verifiedEmail = decoded?.email || clientEmail || '';
-                    tokenName = decoded?.name || '';
-                    tokenPicture = decoded?.picture || '';
-                } catch (jwtErr) {
-                    return res.status(401).json({ success: false, error: 'Invalid or expired Firebase ID token' });
-                }
-            }
-        } else {
-            console.warn('[Users Route] Firebase Admin not initialized, treating idToken/firebaseUid as UID');
-            verifiedUid = (firebaseUid && String(firebaseUid).trim().length > 5) ? String(firebaseUid).trim() : String(idToken).trim();
-            verifiedEmail = (clientEmail || '').trim().toLowerCase();
+        let decodedToken;
+        try {
+            decodedToken = await verifyFirebaseIdTokenCryptographically(rawToken);
+        } catch (tokenErr) {
+            console.warn('⚠️ [Users Route] Rejected invalid/expired Firebase ID token on google-login:', tokenErr.message);
+            return res.status(401).json({ success: false, error: 'Unauthorized: Invalid or expired Firebase ID token' });
         }
 
-        // If client explicitly passed authentic Firebase Auth UID and verifiedUid was numeric Google sub, override with Firebase Auth UID
-        if (firebaseUid && String(firebaseUid).trim().length > 5 && (/^\d+$/.test(verifiedUid) || verifiedUid === googleSubUid)) {
-            verifiedUid = String(firebaseUid).trim();
+        const cleanUid = String(decodedToken.uid || decodedToken.sub || '').trim();
+        const verifiedEmail = decodedToken.email || '';
+        const tokenName = decodedToken.name || '';
+        const tokenPicture = decodedToken.picture || '';
+        const googleSubUid = decodedToken.firebase?.identities?.['google.com']?.[0]
+            ? String(decodedToken.firebase.identities['google.com'][0]).trim()
+            : null;
+
+        if (!cleanUid) {
+            return res.status(401).json({ success: false, error: 'Could not extract verified UID from token' });
         }
 
-        if (!verifiedUid) {
-            return res.status(400).json({ success: false, error: 'Could not extract UID from token' });
-        }
-
-        const cleanUid = String(verifiedUid).trim();
         const cleanEmail = (verifiedEmail || clientEmail || '').trim().toLowerCase();
 
         // 2. Authoritative MongoDB Check: Search by permanent Firebase Auth UID, Email, OR legacy Google sub ID
@@ -176,6 +148,12 @@ async function handleGoogleLogin(req, res) {
         let existingUser = await User.findOne({ $or: searchConditions });
 
         if (existingUser) {
+            if (existingUser.isBanned) {
+                return res.status(403).json({
+                    success: false,
+                    error: 'Your account has been suspended or banned.'
+                });
+            }
             // Auto-migrate legacy Google sub UID (or older UID) to permanent Firebase Auth UID
             if (existingUser.uid !== cleanUid) {
                 const oldUid = existingUser.uid;
@@ -300,13 +278,13 @@ router.post('/verify-token', handleGoogleLogin);
 // 4. POST /create or POST /user/create - Generates 9-digit unique numeric ID only for genuine new users
 async function handleCreateUser(req, res) {
     try {
-        const { uid, name, avatarUrl, dob, gender, country, email } = req.body;
-        if (!uid || !name) {
-            return res.status(400).json({ success: false, error: 'UID and Name are required' });
+        const { name, avatarUrl, dob, gender, country, email } = req.body || {};
+        const cleanUid = String(req.callerUid || '').trim();
+        if (!cleanUid || !name) {
+            return res.status(400).json({ success: false, error: 'Verified UID and Name are required' });
         }
 
-        const cleanUid = String(uid).trim();
-        const cleanEmail = (email || '').trim().toLowerCase();
+        const cleanEmail = (req.user?.email || email || '').trim().toLowerCase();
 
         // Strict 1 Google Account = 1 ID guarantee: check by UID first, then by email
         let existing = await User.findOne({ uid: cleanUid });
@@ -373,24 +351,17 @@ async function handleCreateUser(req, res) {
     }
 }
 
-router.post('/create', handleCreateUser);
-router.post('/user/create', handleCreateUser);
+router.post('/create', verifyStrictFirebaseToken, handleCreateUser);
+router.post('/user/create', verifyStrictFirebaseToken, handleCreateUser);
 
-// 5. POST /update-profile or POST /user/update-profile - Updates user profile
+// 5. POST /update-profile or POST /user/update-profile - Updates authenticated caller's profile
 async function handleUpdateProfile(req, res) {
     try {
-        const { uid, name, avatarUrl, dob, gender, country } = req.body;
-        if (!uid) return res.status(400).json({ success: false, error: 'Missing UID' });
+        const { name, avatarUrl, dob, gender, country } = req.body || {};
+        const cleanUid = String(req.callerUid || '').trim();
+        if (!cleanUid) return res.status(401).json({ success: false, error: 'Missing verified UID' });
 
-        const cleanUid = String(uid).trim();
-        const numId = Number(cleanUid) || 0;
-        const user = await User.findOne({
-            $or: [
-                { uid: cleanUid },
-                ...(numId > 0 ? [{ numericId: numId }] : []),
-                { email: cleanUid.toLowerCase() }
-            ]
-        });
+        const user = await User.findOne({ uid: cleanUid });
         if (!user) return res.status(404).json({ success: false, error: 'User not found' });
 
         if (name && typeof name === 'string') {
@@ -414,11 +385,11 @@ async function handleUpdateProfile(req, res) {
     }
 }
 
-router.post('/update-profile', handleUpdateProfile);
-router.post('/user/update-profile', handleUpdateProfile);
+router.post('/update-profile', verifyAuthenticatedUser, handleUpdateProfile);
+router.post('/user/update-profile', verifyAuthenticatedUser, handleUpdateProfile);
 
 // 6. Parameterized UID lookup (mounted at bottom after specific static routes)
-router.get('/user/:uid', handleGetUser);
-router.get('/:uid', handleGetUser);
+router.get('/user/:uid', verifyStrictFirebaseToken, handleGetUser);
+router.get('/:uid', verifyStrictFirebaseToken, handleGetUser);
 
 module.exports = router;

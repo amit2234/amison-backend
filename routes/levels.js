@@ -1,8 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const LevelController = require('../controllers/levelController');
+const { verifyAuthenticatedUser } = require('../middleware/authMiddleware');
 
-// Public Level endpoints for App Client
+router.use(verifyAuthenticatedUser);
+
+// Authenticated Level endpoints for App Client
 router.get('/all', LevelController.getAllLevels);
 router.get('/rules', LevelController.getLevelRules);
 router.get('/', LevelController.getLevelsByCategory);

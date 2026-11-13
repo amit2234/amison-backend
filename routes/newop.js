@@ -1,10 +1,11 @@
 const express = require('express');
 const router = express.Router();
 const NewopController = require('../controllers/newopController');
+const { verifyAuthenticatedUser } = require('../middleware/authMiddleware');
 
 // Dynamic Access & Authentication Endpoints
-router.get('/check-access/:uid', NewopController.checkAccess);
-router.post('/login', NewopController.login);
+router.get('/check-access/:uid', verifyAuthenticatedUser, NewopController.checkAccess);
+router.post('/login', verifyAuthenticatedUser, NewopController.login);
 
 // User Management Endpoints
 router.get('/users', NewopController.requireNewopAdmin, NewopController.getUsers);
@@ -20,7 +21,7 @@ router.post('/room/block', NewopController.requireNewopAdmin, NewopController.bl
 router.post('/room/reset-photos', NewopController.requireNewopAdmin, NewopController.resetRoomPhotos);
 
 // ZEGO-RTC Configuration Endpoints
-router.get('/zego-config', NewopController.getZegoConfig);
+router.get('/zego-config', verifyAuthenticatedUser, NewopController.getZegoConfig);
 router.post('/zego-config', NewopController.requireNewopAdmin, NewopController.updateZegoConfig);
 
 // Store Management Endpoints (100% Backend-Driven Modular Architecture)
@@ -35,7 +36,7 @@ const giftUploadMiddleware = upload.fields([
 ]);
 
 router.get('/gifts', NewopController.requireNewopAdmin, NewopController.getGifts);
-router.get('/gifts/active', NewopController.getActiveGifts);
+router.get('/gifts/active', verifyAuthenticatedUser, NewopController.getActiveGifts);
 router.post('/gifts/create', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
 router.post('/gifts/add', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
 router.put('/gifts/edit/:giftId', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);

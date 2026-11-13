@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const WithdrawController = require('../controllers/withdrawController');
+const { verifyAuthenticatedUser } = require('../middleware/authMiddleware');
+
+router.use(verifyAuthenticatedUser);
 
 // User Wallet cashout routes
 router.post('/', WithdrawController.submitRequest);

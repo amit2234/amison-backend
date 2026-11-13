@@ -1,19 +1,22 @@
 const express = require('express');
 const router = express.Router();
 const Follow = require('../models/Friend');
+const { verifyAuthenticatedUser } = require('../middleware/authMiddleware');
+
+// NOTE: friendsRoutes is also mounted at `/api` (`/api/user/follow`).
+// Attach verifyAuthenticatedUser per route so unrelated `/api/*` routers aren't shadowed.
 
 // ============================================================================
 // 1. POST /api/friends/follow (or /api/user/follow) - Follow a user
 // ============================================================================
 async function handleFollow(req, res) {
     try {
-        const { followerUid, followingUid } = req.body;
-        if (!followerUid || !followingUid) {
-            return res.status(400).json({ success: false, error: 'followerUid and followingUid are required' });
+        const { followingUid } = req.body || {};
+        const cleanFollower = String(req.callerUid || '').trim();
+        const cleanFollowing = String(followingUid || '').trim();
+        if (!cleanFollower || !cleanFollowing) {
+            return res.status(400).json({ success: false, error: 'followingUid is required' });
         }
-
-        const cleanFollower = String(followerUid).trim();
-        const cleanFollowing = String(followingUid).trim();
 
         if (cleanFollower === cleanFollowing) {
             return res.status(400).json({ success: false, error: 'Users cannot follow themselves' });
@@ -38,21 +41,20 @@ async function handleFollow(req, res) {
     }
 }
 
-router.post('/follow', handleFollow);
-router.post('/user/follow', handleFollow);
+router.post('/follow', verifyAuthenticatedUser, handleFollow);
+router.post('/user/follow', verifyAuthenticatedUser, handleFollow);
 
 // ============================================================================
 // 2. POST /api/friends/unfollow (or /api/user/unfollow) - Unfollow a user
 // ============================================================================
 async function handleUnfollow(req, res) {
     try {
-        const { followerUid, followingUid } = req.body;
-        if (!followerUid || !followingUid) {
-            return res.status(400).json({ success: false, error: 'followerUid and followingUid are required' });
+        const { followingUid } = req.body || {};
+        const cleanFollower = String(req.callerUid || '').trim();
+        const cleanFollowing = String(followingUid || '').trim();
+        if (!cleanFollower || !cleanFollowing) {
+            return res.status(400).json({ success: false, error: 'followingUid is required' });
         }
-
-        const cleanFollower = String(followerUid).trim();
-        const cleanFollowing = String(followingUid).trim();
 
         await Follow.deleteOne({ followerUid: cleanFollower, followingUid: cleanFollowing });
         console.log(`[Friends Route] User ${cleanFollower} unfollowed ${cleanFollowing}`);
@@ -63,8 +65,8 @@ async function handleUnfollow(req, res) {
     }
 }
 
-router.post('/unfollow', handleUnfollow);
-router.post('/user/unfollow', handleUnfollow);
+router.post('/unfollow', verifyAuthenticatedUser, handleUnfollow);
+router.post('/user/unfollow', verifyAuthenticatedUser, handleUnfollow);
 
 // ============================================================================
 // 3. GET /api/friends/stats/:uid (or /api/user/:uid/stats) - Social stats
@@ -107,8 +109,8 @@ async function handleGetStats(req, res) {
     }
 }
 
-router.get('/stats/:uid', handleGetStats);
-router.get('/user/:uid/stats', handleGetStats);
+router.get('/stats/:uid', verifyAuthenticatedUser, handleGetStats);
+router.get('/user/:uid/stats', verifyAuthenticatedUser, handleGetStats);
 
 // ============================================================================
 // 4. GET /api/friends/followers/:uid (or /api/user/:uid/followers)
@@ -126,8 +128,8 @@ async function handleGetFollowers(req, res) {
     }
 }
 
-router.get('/followers/:uid', handleGetFollowers);
-router.get('/user/:uid/followers', handleGetFollowers);
+router.get('/followers/:uid', verifyAuthenticatedUser, handleGetFollowers);
+router.get('/user/:uid/followers', verifyAuthenticatedUser, handleGetFollowers);
 
 // ============================================================================
 // 5. GET /api/friends/following/:uid (or /api/user/:uid/following)
@@ -145,7 +147,7 @@ async function handleGetFollowing(req, res) {
     }
 }
 
-router.get('/following/:uid', handleGetFollowing);
-router.get('/user/:uid/following', handleGetFollowing);
+router.get('/following/:uid', verifyAuthenticatedUser, handleGetFollowing);
+router.get('/user/:uid/following', verifyAuthenticatedUser, handleGetFollowing);
 
 module.exports = router;

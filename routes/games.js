@@ -6,7 +6,9 @@ const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const cacheService = require('../services/cacheService');
 
-const { requireNewopAdmin } = require('../middleware/authMiddleware');
+const { requireNewopAdmin, verifyAuthenticatedUser } = require('../middleware/authMiddleware');
+
+router.use(verifyAuthenticatedUser);
 
 // Basic Game CRUD
 router.get('/', gameController.getGames);
@@ -18,9 +20,9 @@ router.patch('/:gameId/status', requireNewopAdmin, gameController.toggleGameStat
 // ============================================================================
 router.post('/auth/handshake', async (req, res) => {
     try {
-        const { uid } = req.body;
+        const uid = String(req.callerUid || '').trim();
         if (!uid) {
-            return res.status(400).json({ success: false, message: 'User ID is required' });
+            return res.status(401).json({ success: false, message: 'Authentication required' });
         }
 
         // Fetch User and Wallet from Mongo
@@ -64,7 +66,8 @@ router.post('/auth/handshake', async (req, res) => {
 // ============================================================================
 router.post('/galaxy_star/bet', async (req, res) => {
     try {
-        const { uid, numericId, userName, userAvatar, planetId, amount, txId } = req.body;
+        const { numericId, userName, userAvatar, planetId, amount, txId } = req.body || {};
+        const uid = String(req.callerUid || '').trim();
         const result = await galaxyGameEngine.placeBet({
             uid,
             numericId,

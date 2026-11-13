@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const messageController = require('../controllers/messageController');
 const conversationController = require('../controllers/conversationController');
+const { verifyAuthenticatedUser } = require('../middleware/authMiddleware');
+
+router.use(verifyAuthenticatedUser);
 
 // Send Message
 router.post('/send', messageController.sendMessage);
