@@ -85,12 +85,14 @@ const RoomController = {
 
     async kickUser(req, res) {
         try {
-            const { roomId, targetUserId, durationHours, hostName } = req.body || {};
-            const result = await RoomService.kickUser(roomId, targetUserId, durationHours, hostName);
+            const { roomId, targetUserId, durationHours, hostName, requesterUid } = req.body || {};
+            const actorUid = req.verifiedUid || requesterUid || '';
+            const result = await RoomService.kickUser(roomId, targetUserId, durationHours, hostName, actorUid);
             return res.json({ success: true, ...result });
         } catch (e) {
             console.error('[RoomController] Kick user error:', e);
-            return res.status(500).json({ success: false, error: e.message });
+            const code = e.statusCode || 500;
+            return res.status(code).json({ success: false, error: e.message });
         }
     },
 
@@ -177,11 +179,13 @@ const RoomController = {
             const { roomId, targetUserId, userId, newRole, role, requesterUid } = req.body || {};
             const resolvedTarget = targetUserId || userId;
             const resolvedRole = newRole || role;
-            const result = await RoomService.updateMemberRole(roomId, resolvedTarget, resolvedRole, requesterUid);
+            const actorUid = req.verifiedUid || requesterUid || '';
+            const result = await RoomService.updateMemberRole(roomId, resolvedTarget, resolvedRole, actorUid);
             return res.json({ success: true, ...result });
         } catch (e) {
             console.error('[RoomController] Update member role error:', e);
-            return res.status(500).json({ success: false, error: e.message });
+            const code = e.statusCode || 500;
+            return res.status(code).json({ success: false, error: e.message });
         }
     }
 };
