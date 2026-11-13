@@ -1,6 +1,7 @@
 const Room = require('../../../models/Room');
 const User = require('../../../models/User');
 const roomRoleHelper = require('../../../services/roomRoleHelper');
+const { VALID_STAGE_CAPACITIES, DEFAULT_STAGE_CAPACITY, normalizeStageCapacity } = require('../room.constants');
 const { channelManager, resolveTrueOwnerUid, generateUnique6DigitId, getBroadcastTargets } = require('../room.channel.manager');
 const roomStateCache = require('../room.state.cache');
 const roomDiscoveryActivity = require('./roomDiscovery.activity');
@@ -41,7 +42,8 @@ const roomSettingsActivity = {
             announcement,
             isLocked,
             pinCode,
-            displayRoomId
+            displayRoomId,
+            speakerSlots
         } = data || {};
 
         const rawUid = String(ownerUid || '').trim();
@@ -87,6 +89,10 @@ const roomSettingsActivity = {
             if (displayRoomId !== undefined && String(displayRoomId).trim().length > 0) {
                 room.displayRoomId = String(displayRoomId).trim();
             }
+            const parsedRequestedSlots = Number(speakerSlots);
+            if (speakerSlots !== undefined && speakerSlots !== null && VALID_STAGE_CAPACITIES.includes(parsedRequestedSlots)) {
+                room.speakerSlots = parsedRequestedSlots;
+            }
             room.isLive = true;
             room.onlineCount = Math.max(1, room.onlineCount || 1);
             room.heatScore = Math.max(10, room.heatScore || 10);
@@ -105,6 +111,7 @@ const roomSettingsActivity = {
                 backgroundUrl: backgroundUrl || '',
                 category: category || 'Voice Party',
                 announcement: announcement || 'Welcome to my room!',
+                speakerSlots: normalizeStageCapacity(speakerSlots, DEFAULT_STAGE_CAPACITY),
                 isLocked: Boolean(isLocked),
                 pinCode: pinCode || '',
                 isLive: false,
@@ -126,6 +133,11 @@ const roomSettingsActivity = {
 
         const roomObj = room.toObject();
         roomRoleHelper.cacheRoomRoles(roomObj);
+        const authoritativeSlots = normalizeStageCapacity(roomObj.speakerSlots, DEFAULT_STAGE_CAPACITY);
+        if (speakerSlots !== undefined && speakerSlots !== null && VALID_STAGE_CAPACITIES.includes(Number(speakerSlots))) {
+            roomStateCache.setSpeakerSlots(cleanUid, authoritativeSlots);
+            roomStateCache.persistCapacityToRedisAsync(cleanUid, authoritativeSlots);
+        }
 
         // Push live room metadata/wallpaper/notice updates to anyone currently inside the room
         const targets = getBroadcastTargets(cleanUid, roomObj.displayRoomId, null, roomObj);
@@ -137,6 +149,7 @@ const roomSettingsActivity = {
             announcement: roomObj.announcement || '',
             backgroundUrl: roomObj.backgroundUrl || '',
             roomPhotoUrl: roomObj.roomPhotoUrl || '',
+            speakerSlots: authoritativeSlots,
             isLocked: Boolean(roomObj.isLocked),
             timestamp: Date.now()
         });
