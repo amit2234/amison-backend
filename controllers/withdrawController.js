@@ -8,7 +8,7 @@ class WithdrawController {
      */
     static async submitRequest(req, res) {
         try {
-            const userId = req.user ? (req.user.uid || req.user.id) : req.body.userId;
+            const userId = String(req.callerUid || '').trim();
             if (!userId) {
                 return res.status(401).json({ success: false, error: 'Authentication required' });
             }
@@ -41,7 +41,7 @@ class WithdrawController {
      */
     static async getUserHistory(req, res) {
         try {
-            const userId = req.user ? (req.user.uid || req.user.id) : req.query.userId;
+            const userId = String(req.callerUid || '').trim();
             if (!userId) {
                 return res.status(401).json({ success: false, error: 'Authentication required' });
             }

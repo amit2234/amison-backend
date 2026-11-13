@@ -8,10 +8,9 @@ const NewopController = {
 
     async checkAccess(req, res) {
         try {
-            const { uid } = req.params;
-            if (!uid) return res.json({ success: true, hasAccess: false, title: '' });
+            const cleanUid = String(req.callerUid || '').trim();
+            if (!cleanUid) return res.status(401).json({ success: false, hasAccess: false, title: '' });
 
-            const cleanUid = String(uid).trim();
             const hasAccess = await NewopAuthService.isAuthorizedNewopAdmin(cleanUid);
 
             return res.json({
@@ -27,10 +26,10 @@ const NewopController = {
 
     async login(req, res) {
         try {
-            const { uid, password } = req.body || {};
-            if (!uid) return res.status(400).json({ success: false, error: 'UID is required' });
+            const { password } = req.body || {};
+            const cleanUid = String(req.callerUid || '').trim();
+            if (!cleanUid) return res.status(401).json({ success: false, error: 'Authentication required' });
 
-            const cleanUid = String(uid).trim();
             const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(cleanUid);
 
             if (!isAuth) {

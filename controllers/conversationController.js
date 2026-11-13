@@ -11,9 +11,9 @@ const conversationController = {
      */
     async getConversations(req, res) {
         try {
-            const cleanUid = String(req.params.uid || '').trim();
+            const cleanUid = String(req.callerUid || '').trim();
             if (!cleanUid) {
-                return res.status(400).json({ success: false, conversations: [], error: 'Missing UID' });
+                return res.status(401).json({ success: false, conversations: [], error: 'Authentication required' });
             }
 
             if (!DirectConversation || typeof DirectConversation.find !== 'function') {

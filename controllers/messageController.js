@@ -10,7 +10,11 @@ const messageController = {
      */
     async sendMessage(req, res) {
         try {
-            const result = await messagingService.sendMessage(req.body);
+            const payload = {
+                ...(req.body || {}),
+                senderId: req.callerUid
+            };
+            const result = await messagingService.sendMessage(payload);
             return res.json(result);
         } catch (e) {
             console.error('[MessageController] Send error:', e);
@@ -24,7 +28,7 @@ const messageController = {
     async getHistory(req, res) {
         try {
             const convId = String(req.params.conversationId || '').trim();
-            const viewerUid = String(req.query.uid || '').trim();
+            const viewerUid = String(req.callerUid || '').trim();
             const limit = Math.min(Math.max(Number(req.query.limit) || 100, 10), 250);
 
             if (!convId) {
@@ -75,9 +79,9 @@ const messageController = {
      */
     async markRead(req, res) {
         try {
-            const { conversationId, uid } = req.body || {};
+            const { conversationId } = req.body || {};
             const convId = String(conversationId || '').trim();
-            const cleanUid = String(uid || '').trim();
+            const cleanUid = String(req.callerUid || '').trim();
 
             if (!convId || !cleanUid) {
                 return res.status(400).json({ success: false, error: 'Missing conversationId or uid' });
@@ -117,9 +121,9 @@ const messageController = {
      */
     async deleteMessage(req, res) {
         try {
-            const { conversationId, messageId, uid, deleteConversation } = req.body || {};
+            const { conversationId, messageId, deleteConversation } = req.body || {};
             const convId = String(conversationId || '').trim();
-            const cleanUid = String(uid || '').trim();
+            const cleanUid = String(req.callerUid || '').trim();
 
             if (!convId) {
                 return res.status(400).json({ success: false, error: 'Missing conversationId' });

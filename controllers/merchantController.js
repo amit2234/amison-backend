@@ -43,9 +43,9 @@ const merchantController = {
      */
     async getMyStatus(req, res) {
         try {
-            const userId = req.params.userId || req.query.userId || req.callerUid;
+            const userId = req.callerUid;
             if (!userId) {
-                return res.status(400).json({ success: false, message: 'userId is required' });
+                return res.status(401).json({ success: false, message: 'Authentication required' });
             }
             const status = await merchantService.getMyMerchantStatus(userId);
             res.json({ success: true, data: status });
@@ -113,7 +113,8 @@ const merchantController = {
      */
     async rechargeUser(req, res) {
         try {
-            const { merchantUid, targetUserId, coins, transferType, idempotencyKey, note } = req.body;
+            const { targetUserId, coins, transferType, idempotencyKey, note } = req.body || {};
+            const merchantUid = String(req.callerUid || '').trim();
             if (!merchantUid || !targetUserId || !coins) {
                 return res.status(400).json({
                     success: false,
@@ -143,7 +144,10 @@ const merchantController = {
      */
     async getMyStock(req, res) {
         try {
-            const { userId } = req.params;
+            const userId = String(req.callerUid || '').trim();
+            if (!userId) {
+                return res.status(401).json({ success: false, message: 'Authentication required' });
+            }
             const merchant = await merchantService.getMerchantDetails(userId);
             if (!merchant) {
                 return res.json({ success: true, isMerchant: false, sellingStock: 0 });
@@ -167,7 +171,10 @@ const merchantController = {
      */
     async getMyHistory(req, res) {
         try {
-            const { userId } = req.params;
+            const userId = String(req.callerUid || '').trim();
+            if (!userId) {
+                return res.status(401).json({ success: false, message: 'Authentication required' });
+            }
             const { limit } = req.query;
             const history = await merchantService.getMerchantHistory({ userId, limit });
             res.json({ success: true, count: history.length, data: history });
