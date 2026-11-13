@@ -1,0 +1,284 @@
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 0;
+      background-color: #000000;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #gameContainer {
+      position: relative;
+      width: 100vw;
+      max-width: calc(100vh * (720 / 1030));
+      height: calc(100vw * (1030 / 720));
+      max-height: 100vh;
+      background-color: #01040a;
+      border: 2px solid #0088ff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      box-sizing: border-box;
+      flex-shrink: 0;
+    }
+
+    #gameCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background-color: #01040a;
+    }
+
+    /* WINNER POPUP: FULL WIDTH COVERAGE, NO LEFT/RIGHT/BOTTOM GAP, SLIDE IN FROM BOTTOM */
+    .winner-popup {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      width: 100%;
+      background: rgba(5, 12, 28, 0.85);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border-top: 2px solid rgba(56, 189, 248, 0.6);
+      border-top-left-radius: 22px;
+      border-top-right-radius: 22px;
+      padding: 14px 18px 20px 18px;
+      color: #ffffff;
+      box-shadow: 0 -12px 35px rgba(0, 0, 0, 0.85);
+      z-index: 50;
+      box-sizing: border-box;
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s ease;
+      transform: translateY(0);
+      opacity: 1;
+      pointer-events: none;
+    }
+    .winner-popup.hidden {
+      transform: translateY(105%);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .winner-popup-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0 10px;
+      font-size: 14px;
+      font-weight: 800;
+      margin-bottom: 10px;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    .winner-price-box {
+      color: #fde047;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .winner-price-box .label {
+      color: #94a3b8;
+      font-weight: 600;
+    }
+    .winner-price-box .val {
+      color: #facc15;
+      font-weight: 900;
+    }
+    .winner-wager-box {
+      color: #6ee7b7;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+    }
+    .winner-wager-box .label {
+      color: #94a3b8;
+      font-weight: 600;
+    }
+    .winner-wager-box .val {
+      color: #ffffff;
+      font-weight: 900;
+    }
+    .winner-podium {
+      display: flex;
+      justify-content: space-around;
+      align-items: flex-end;
+      padding: 4px 6px;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    .podium-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .podium-col.center {
+      transform: translateY(-6px);
+    }
+    .podium-avatar-box {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: rgba(15, 23, 42, 0.85);
+      border: 2px dashed #64748b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      margin-bottom: 4px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+    }
+    .podium-avatar-box.center-ring {
+      width: 66px;
+      height: 66px;
+      border: 2.5px solid #facc15;
+      border-style: solid;
+      background: linear-gradient(135deg, #d97706, #facc15);
+      box-shadow: 0 0 20px rgba(250, 204, 21, 0.45);
+    }
+    .podium-avatar {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+    }
+    .podium-placeholder {
+      font-size: 22px;
+      color: #94a3b8;
+    }
+    .podium-avatar-box.center-ring .podium-placeholder {
+      font-size: 28px;
+      color: #000000;
+    }
+    .podium-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: #cbd5e1;
+      margin-top: 2px;
+    }
+    .podium-name.center-name {
+      font-size: 13px;
+      font-weight: 800;
+      color: #fde047;
+    }
+    .podium-amt {
+      font-size: 12px;
+      font-weight: 700;
+      color: #94a3b8;
+    }
+    .podium-amt.center-amt {
+      font-size: 14px;
+      font-weight: 900;
+      color: #facc15;
+    }
+
+/* ========================================================================== */
+/* DEDICATED GALAXY VAULT AUTH & ROUND SYNC LOADING OVERLAY                   */
+/* ========================================================================== */
+.game-loading-overlay {
+  position: absolute;
+  top: 0; left: 0; width: 100%; height: 100%;
+  background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  transition: opacity 0.4s ease, visibility 0.4s ease;
+}
+.game-loading-overlay.fade-out {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.loading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px;
+}
+.planet-spinner {
+  position: relative;
+  width: 90px;
+  height: 90px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+.orbit-ring {
+  position: absolute;
+  width: 80px;
+  height: 80px;
+  border: 2px dashed rgba(56, 189, 248, 0.4);
+  border-radius: 50%;
+  animation: spinOrbit 3s linear infinite;
+}
+.orbit-planet {
+  position: absolute;
+  top: 0;
+  left: 36px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #38bdf8;
+  box-shadow: 0 0 12px #38bdf8;
+  animation: spinOrbit 3s linear infinite;
+  transform-origin: 9px 45px;
+}
+.center-star {
+  font-size: 26px;
+  filter: drop-shadow(0 0 8px #facc15);
+  animation: pulseStar 1.5s ease-in-out infinite alternate;
+}
+@keyframes spinOrbit {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@keyframes pulseStar {
+  from { transform: scale(0.9); }
+  to { transform: scale(1.15); }
+}
+.loading-title {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 2px;
+  color: #38bdf8;
+  text-shadow: 0 0 14px rgba(56, 189, 248, 0.6);
+  margin-bottom: 8px;
+}
+.loading-status {
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-bottom: 18px;
+}
+.loading-bar-container {
+  width: 180px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.loading-bar-fill {
+  width: 30%;
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #818cf8);
+  border-radius: 6px;
+  animation: loadingSweep 1.8s ease-in-out infinite;
+}
+@keyframes loadingSweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
