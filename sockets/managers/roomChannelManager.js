@@ -40,7 +40,7 @@ class RoomChannelManager {
     /**
      * Subscribe a client socket to a room channel
      */
-    joinRoomChannel(roomId, userId, ws, userName = '', userCustomId = '') {
+    joinRoomChannel(roomId, userId, ws, userName = '', userCustomId = '', verifiedUid = '') {
         if (!roomId || !ws) return;
         const cleanRoomId = String(roomId).trim();
         const cleanUserId = String(userId || '').trim();
@@ -53,6 +53,7 @@ class RoomChannelManager {
         if (existingMeta && existingMeta.canonicalRoomId && existingMeta.canonicalRoomId !== canonicalId) {
             this.leaveRoomChannel(existingMeta.canonicalRoomId, ws);
         }
+        const effectiveVerifiedUid = String(verifiedUid || existingMeta?.verifiedUid || '').trim();
 
         // 2. Add to canonical room channel
         if (!this.roomChannels.has(canonicalId)) {
@@ -74,6 +75,7 @@ class RoomChannelManager {
             roomId: cleanRoomId,
             canonicalRoomId: canonicalId,
             userId: cleanUserId,
+            verifiedUid: effectiveVerifiedUid,
             userName: cleanUserName,
             userCustomId: cleanUserCustomId,
             joinedAt: Date.now()
@@ -165,3 +167,4 @@ class RoomChannelManager {
 }
 
 module.exports = new RoomChannelManager();
+                                  
