@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
 const cacheService = require('../services/cacheService');
+const { verifyWebSocketConnection } = require('../middleware/authMiddleware');
 
 /**
  * Dedicated 1-to-1 Personal Chat & Online Presence WebSocket Server
@@ -12,37 +13,39 @@ function setupChatSocket(server) {
     wss.on('connection', (ws, req) => {
         let currentUserId = null;
         let currentConversationId = null;
+        ws._verifiedUid = '';
 
-        try {
-            const urlObj = new URL(req.url, 'http://localhost');
-            const queryUserId = urlObj.searchParams.get('userId');
-            const headerUserId = req.headers['x-user-id'];
-            currentUserId = (queryUserId || headerUserId || '').trim();
-            if (currentUserId) {
+        ws._authPromise = verifyWebSocketConnection(req, { requireMongoUser: true })
+            .then(({ verifiedUid }) => {
+                ws._verifiedUid = verifiedUid;
+                currentUserId = verifiedUid;
                 cacheService.setUserOnline(currentUserId, ws);
-                console.log(`[ChatSocket] User registered online: ${currentUserId}`);
-            }
-        } catch (e) {
-            console.error('[ChatSocket] Error parsing connection request:', e.message);
-        }
+                console.log(`[ChatSocket] Verified user online: ${currentUserId}`);
+                return verifiedUid;
+            })
+            .catch((authErr) => {
+                console.warn('[ChatSocket] Rejected unauthorized socket:', authErr?.message || authErr);
+                try { ws.close(4001, 'Unauthorized'); } catch (_) {}
+                return '';
+            });
 
         ws.on('message', async (rawMessage) => {
             try {
+                if (ws._authPromise) {
+                    await ws._authPromise;
+                }
+                if (!ws._verifiedUid) {
+                    try { ws.close(4001, 'Unauthorized'); } catch (_) {}
+                    return;
+                }
+                currentUserId = ws._verifiedUid;
+
                 const data = JSON.parse(rawMessage.toString());
 
-                // 0. General user registration / association
-                if (data.userId && !currentUserId) {
-                    currentUserId = String(data.userId).trim();
-                    cacheService.setUserOnline(currentUserId, ws);
-                }
-
-                // 1. User joins conversation room or registers
+                // 1. User joins conversation room or registers (always bound to verifiedUid)
                 if (data.type === 'dm:join' || data.type === 'user:register' || data.type === 'auth:register') {
-                    currentUserId = data.userId ? String(data.userId).trim() : currentUserId;
                     currentConversationId = data.conversationId || currentConversationId;
-                    if (currentUserId) {
-                        cacheService.setUserOnline(currentUserId, ws);
-                    }
+                    cacheService.setUserOnline(currentUserId, ws);
                 }
 
                 // 2. Real-Time Typing Indicator Event
@@ -54,7 +57,7 @@ function setupChatSocket(server) {
                         recipientSocket.send(JSON.stringify({
                             type: 'dm:typing_update',
                             conversationId: data.conversationId,
-                            userId: data.senderId,
+                            userId: currentUserId,
                             isTyping: Boolean(data.isTyping)
                         }));
                     }
@@ -69,7 +72,7 @@ function setupChatSocket(server) {
                         type: 'dm:receive',
                         messageId: data.clientMessageId || `${Date.now()}`,
                         conversationId: data.conversationId,
-                        senderId: data.senderId,
+                        senderId: currentUserId,
                         senderName: data.senderName || 'User',
                         senderAvatar: data.senderAvatar || '',
                         text: data.text || '',

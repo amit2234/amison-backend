@@ -1,7 +1,7 @@
 const WebSocket = require('ws');
 const galaxyGameEngine = require('../services/galaxyGameEngine');
 const Wallet = require('../models/Wallet');
-const User = require('../models/User');
+const { verifyWebSocketConnection } = require('../middleware/authMiddleware');
 
 let globalGameWss = null;
 
@@ -9,39 +9,56 @@ function setupGameSocket(server) {
     const wss = new WebSocket.Server({ noServer: true });
     globalGameWss = wss;
 
-    wss.on('connection', async (ws, req) => {
+    wss.on('connection', (ws, req) => {
         let authUser = null;
-        try {
-            const urlObj = new URL(req.url, 'http://localhost');
-            const token = urlObj.searchParams.get('token') || '';
-            const uid = urlObj.searchParams.get('uid') || '';
+        ws._verifiedUid = '';
 
-            if (uid) {
-                const u = await User.findOne({ uid }).lean();
-                const w = await Wallet.findOne({ uid }).lean();
+        ws._authPromise = verifyWebSocketConnection(req, { requireMongoUser: true })
+            .then(async ({ verifiedUid, userDoc }) => {
+                ws._verifiedUid = verifiedUid;
+                const w = await Wallet.findOne({ uid: verifiedUid }).lean();
                 authUser = {
-                    uid,
-                    numericId: u?.numericId || w?.numericId || 100000,
-                    name: u?.name || 'Player',
-                    avatar: u?.avatar || '',
-                    coins: w?.coins || 0
+                    uid: verifiedUid,
+                    numericId: userDoc?.numericId || w?.numericId || 100000,
+                    name: userDoc?.name || 'Player',
+                    avatar: userDoc?.avatarUrl || '',
+                    coins: w?.coins || userDoc?.coins || 0
                 };
-            }
-        } catch (_) {}
 
-        galaxyGameEngine.connectedClients.add(ws);
-        console.log(`🎮 [GameSocket] Client connected to Galaxy Star live table. (Total: ${galaxyGameEngine.connectedClients.size})`);
+                galaxyGameEngine.connectedClients.add(ws);
+                console.log(`🎮 [GameSocket] Verified client ${verifiedUid} connected to Galaxy Star. (Total: ${galaxyGameEngine.connectedClients.size})`);
 
-        // Send initial instant state snapshot
-        const snapshot = galaxyGameEngine.getSnapshotState(authUser?.uid);
-        ws.send(JSON.stringify({
-            event: 'INIT_SYNC',
-            ...snapshot,
-            user: authUser
-        }));
+                const snapshot = galaxyGameEngine.getSnapshotState(authUser.uid);
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        event: 'INIT_SYNC',
+                        ...snapshot,
+                        user: authUser
+                    }));
+                }
+                return verifiedUid;
+            })
+            .catch((authErr) => {
+                console.warn('🎮 [GameSocket] Rejected unauthorized socket:', authErr?.message || authErr);
+                try {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ event: 'ERROR', message: 'Unauthorized. Valid Firebase token required.' }));
+                    }
+                    ws.close(4001, 'Unauthorized');
+                } catch (_) {}
+                return '';
+            });
 
         ws.on('message', async (raw) => {
             try {
+                if (ws._authPromise) {
+                    await ws._authPromise;
+                }
+                if (!ws._verifiedUid || !authUser) {
+                    try { ws.close(4001, 'Unauthorized'); } catch (_) {}
+                    return;
+                }
+
                 const data = JSON.parse(raw.toString());
 
                 if (data.action === 'PING') {
@@ -51,10 +68,6 @@ function setupGameSocket(server) {
 
                 if (data.action === 'BET') {
                     const { planetId, amount, txId } = data;
-                    if (!authUser) {
-                        ws.send(JSON.stringify({ event: 'ERROR', message: 'Unauthorized. Token required.' }));
-                        return;
-                    }
 
                     try {
                         const result = await galaxyGameEngine.placeBet({
