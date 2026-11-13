@@ -30,6 +30,9 @@ const activeRooms = new Map();
 
 // 3. In-Memory 16-Seat Grid Stages: roomId => Array[16] (Instant 0ms lookup & lock/unlock)
 const roomSeatsMap = new Map();
+const roomSpeakerSlotsMap = new Map(); // roomId => 4 | 8 | 12 | 16
+const roomHydratedSet = new Set();     // tracks rooms hydrated from Mongo/Redis
+const roomStateVersionMap = new Map(); // roomId => monotonic integer
 
 // 4. In-Memory Unread Count Fallback: uid => Map(conversationId => count)
 const memoryUnreadMap = new Map();
@@ -109,26 +112,79 @@ function getOrCreateRoomSeats(roomId) {
 }
 
 /**
- * Hydrates initial lock/mute seat state from MongoDB Room.seats if RAM cache does not exist yet.
- * Does not restore stale ghost occupants if nobody is actively connected.
+ * Hydrates initial lock/mute seat state & capacity from MongoDB Room document if not yet hydrated.
+ * Uses sticky lock merge with Room.lockedSeats[] so locks never silently drop even if RAM was touched early.
  */
-function hydrateRoomSeatsFromDoc(roomId, dbSeats) {
+function hydrateRoomSeatsFromDoc(roomId, dbSeats, dbLockedSeats = null, dbSpeakerSlots = null) {
     if (!roomId) return [];
-    if (roomSeatsMap.has(roomId)) {
-        return getOrCreateRoomSeats(roomId);
-    }
     const initialized = getOrCreateRoomSeats(roomId);
+
+    if (dbSpeakerSlots !== undefined && dbSpeakerSlots !== null && !roomSpeakerSlotsMap.has(roomId)) {
+        const cap = Number(dbSpeakerSlots);
+        if ([4, 8, 12, 16].includes(cap)) {
+            roomSpeakerSlotsMap.set(roomId, cap);
+        }
+    }
+
+    if (roomHydratedSet.has(roomId)) {
+        return initialized;
+    }
+
+    const lockedSet = new Set(
+        Array.isArray(dbLockedSeats)
+            ? dbLockedSeats.map((x) => Number(x)).filter((n) => !Number.isNaN(n) && n >= 0 && n < 16)
+            : []
+    );
+
     if (Array.isArray(dbSeats)) {
         for (let i = 0; i < Math.min(16, dbSeats.length); i++) {
             const dbSeat = dbSeats[i];
-            if (!dbSeat || !initialized[i]) continue;
-            initialized[i].isLocked = Boolean(dbSeat.isLocked);
-            const mutedByHost = Boolean(dbSeat.isMicTurnedOff);
-            initialized[i].isMicTurnedOff = mutedByHost;
-            initialized[i].isMuted = mutedByHost || Boolean(dbSeat.isMuted);
+            if (!initialized[i]) continue;
+            const seatLockedInDoc = Boolean(dbSeat?.isLocked) || lockedSet.has(i);
+            if (seatLockedInDoc) {
+                initialized[i].isLocked = true;
+            }
+            if (dbSeat) {
+                const mutedByHost = Boolean(dbSeat.isMicTurnedOff);
+                initialized[i].isMicTurnedOff = mutedByHost;
+                initialized[i].isMuted = mutedByHost || Boolean(dbSeat.isMuted);
+            }
         }
+        roomHydratedSet.add(roomId);
+    } else if (lockedSet.size > 0) {
+        lockedSet.forEach((idx) => {
+            if (initialized[idx]) initialized[idx].isLocked = true;
+        });
+        roomHydratedSet.add(roomId);
     }
+
     return initialized;
+}
+
+function getRoomSpeakerSlots(roomId, fallback = 8) {
+    if (!roomId) return fallback;
+    const val = roomSpeakerSlotsMap.get(roomId);
+    return [4, 8, 12, 16].includes(val) ? val : fallback;
+}
+
+function setRoomSpeakerSlots(roomId, slots) {
+    if (!roomId) return;
+    const cap = Number(slots);
+    if ([4, 8, 12, 16].includes(cap)) {
+        roomSpeakerSlotsMap.set(roomId, cap);
+    }
+}
+
+function nextRoomStateVersion(roomId) {
+    if (!roomId) return Date.now();
+    const next = (roomStateVersionMap.get(roomId) || 0) + 1;
+    roomStateVersionMap.set(roomId, next);
+    return next;
+}
+
+function getRoomStateVersion(roomId) {
+    if (!roomId) return 0;
+    return roomStateVersionMap.get(roomId) || 0;
 }
 
 /**
@@ -203,6 +259,8 @@ function getRoomParticipants(roomId) {
 function removeRoom(roomId) {
     activeRooms.delete(roomId);
     roomSeatsMap.delete(roomId);
+    roomHydratedSet.delete(roomId);
+    roomSpeakerSlotsMap.delete(roomId);
 }
 
 /**
@@ -436,10 +494,16 @@ module.exports = {
     onlineUsers,
     activeRooms,
     roomSeatsMap,
+    roomSpeakerSlotsMap,
+    roomHydratedSet,
     withUserLock,
     checkAndMarkIdempotency,
     getOrCreateRoomSeats,
     hydrateRoomSeatsFromDoc,
+    getRoomSpeakerSlots,
+    setRoomSpeakerSlots,
+    nextRoomStateVersion,
+    getRoomStateVersion,
     calculateRoomHeat,
     setUserOnline,
     removeUserOnline,
