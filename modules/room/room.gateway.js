@@ -1,5 +1,5 @@
 const WebSocket = require('ws');
-const { verifyFirebaseIdTokenCryptographically } = require('../../middleware/authMiddleware');
+const { verifyWebSocketConnection } = require('../../middleware/authMiddleware');
 const { WS_HEARTBEAT_INTERVAL_MS, ERROR_CODES, ACTIVITY_NAMES } = require('./room.constants');
 const { channelManager } = require('./room.channel.manager');
 const roomLifecycleActivity = require('./activities/roomLifecycle.activity');
@@ -135,47 +135,66 @@ function setupRoomSocket(server) {
     wss.on('connection', (ws, req) => {
         ws.isAlive = true;
         ws._roomCleanedUp = false;
+        ws._verifiedUid = '';
 
         ws.on('pong', () => {
             ws.isAlive = true;
         });
 
+        let roomId = '';
+        let displayRoomId = '';
         try {
             const urlObj = new URL(req.url, 'http://localhost');
-            const userId = (urlObj.searchParams.get('userId') || req.headers['x-user-id'] || '').trim();
-            const roomId = (urlObj.searchParams.get('roomId') || req.headers['x-room-id'] || '').trim();
-            const displayRoomId = (urlObj.searchParams.get('displayRoomId') || req.headers['x-display-room-id'] || '').trim();
-            const authHeader = String(req.headers['authorization'] || '').trim();
-            const rawToken = (urlObj.searchParams.get('token') || (authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '')).trim();
-
-            if (rawToken) {
-                ws._authPromise = verifyFirebaseIdTokenCryptographically(rawToken)
-                    .then((decoded) => {
-                        const verifiedUid = String(decoded?.uid || decoded?.sub || '').trim();
-                        if (verifiedUid) {
-                            ws._verifiedUid = verifiedUid;
-                            const currentMeta = channelManager.getMetadata(ws);
-                            if (currentMeta) {
-                                currentMeta.verifiedUid = verifiedUid;
-                            }
-                        }
-                        return verifiedUid;
-                    })
-                    .catch(() => '');
-            }
-
-            if (displayRoomId && roomId) {
-                channelManager.registerAlias(displayRoomId, roomId);
-            }
-            if (roomId && userId) {
-                channelManager.joinRoomChannel(roomId, userId, ws, '', '', ws._verifiedUid || '');
-            }
+            roomId = (urlObj.searchParams.get('roomId') || req.headers['x-room-id'] || '').trim();
+            displayRoomId = (urlObj.searchParams.get('displayRoomId') || req.headers['x-display-room-id'] || '').trim();
         } catch (_) {}
+
+        ws._authPromise = verifyWebSocketConnection(req, { requireMongoUser: true })
+            .then(({ verifiedUid, userDoc }) => {
+                ws._verifiedUid = verifiedUid;
+                ws._authUser = userDoc;
+                const currentMeta = channelManager.getMetadata(ws);
+                if (currentMeta) {
+                    currentMeta.verifiedUid = verifiedUid;
+                    currentMeta.userId = verifiedUid;
+                }
+                if (displayRoomId && roomId) {
+                    channelManager.registerAlias(displayRoomId, roomId);
+                }
+                if (roomId && verifiedUid) {
+                    channelManager.joinRoomChannel(
+                        roomId,
+                        verifiedUid,
+                        ws,
+                        userDoc?.name || '',
+                        userDoc?.numericId ? String(userDoc.numericId) : '',
+                        verifiedUid
+                    );
+                }
+                return verifiedUid;
+            })
+            .catch((authErr) => {
+                console.warn('⚠️ [RoomGateway] Rejected unauthorized socket:', authErr?.message || authErr);
+                try {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'error', code: 'UNAUTHORIZED', message: 'Valid authentication required.' }));
+                    }
+                    ws.close(4001, 'Unauthorized');
+                } catch (_) {}
+                return '';
+            });
 
         const triggerPopularBroadcast = () => roomDiscoveryActivity.schedulePopularRoomsBroadcast(wss);
 
         ws.on('message', async (rawMessage) => {
             ws.isAlive = true;
+            if (ws._authPromise) {
+                await ws._authPromise;
+            }
+            if (!ws._verifiedUid) {
+                try { ws.close(4001, 'Unauthorized'); } catch (_) {}
+                return;
+            }
             let data;
             try {
                 data = JSON.parse(rawMessage.toString());
