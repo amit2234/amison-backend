@@ -62,18 +62,10 @@ const friendsRoutes = require('./routes/friends');
 app.use('/api/friends', friendsRoutes);
 app.use('/api', friendsRoutes); // Backwards compatibility for /api/user/follow etc.
 
-// 6. Store REST API (/api/store)
-const storeRoutes = require('./routes/store');
-app.use('/api/store', storeRoutes);
-let newopStoreRoutesModule;
-try {
-    newopStoreRoutesModule = require('./models/newop/store/newopStoreRoutes');
-} catch (e) {
-    console.warn('⚠️ [Server] newopStoreRoutes module not found:', e.message);
-}
-if (newopStoreRoutesModule) {
-    app.use('/api/store/admin', newopStoreRoutesModule);
-}
+// 6. Store REST API (/api/store & /api/store/admin) - Modular Real-Time Store Engine
+const storeModule = require('./modules/store');
+app.use('/api/store', storeModule.publicRoutes);
+app.use('/api/store/admin', storeModule.adminRoutes);
 
 // 7. Admin Panel Router (/api/newop)
 try {
@@ -149,6 +141,9 @@ const chatWss = setupChatSocket(server);
 const setupGameSocket = require('./sockets/gameSocket');
 const gameWss = setupGameSocket(server);
 
+// 4. Dedicated Real-Time Store Catalog & Inventory WebSocket (/ws/store)
+const storeWss = storeModule.realtime.setupStoreSocket();
+
 // Dedicated HTTP Upgrade Router (Zero 400 Bad Request collisions, Cloudflare & Render compliant)
 server.on('upgrade', (request, socket, head) => {
     try {
@@ -164,6 +159,10 @@ server.on('upgrade', (request, socket, head) => {
         } else if (pathname === '/ws/games' || pathname.startsWith('/ws/games/')) {
             gameWss.handleUpgrade(request, socket, head, (ws) => {
                 gameWss.emit('connection', ws, request);
+            });
+        } else if (pathname === '/ws/store' || pathname.startsWith('/ws/store/')) {
+            storeWss.handleUpgrade(request, socket, head, (ws) => {
+                storeWss.emit('connection', ws, request);
             });
         } else {
             socket.destroy();
