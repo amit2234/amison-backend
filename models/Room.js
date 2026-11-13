@@ -23,6 +23,8 @@ const roomSchema = new mongoose.Schema({
     totalCoinsEarned: { type: Number, default: 0, min: 0 },
     isBlocked: { type: Boolean, default: false, index: true },
     level: { type: Number, default: 1 },
+    speakerSlots: { type: Number, enum: [4, 8, 12, 16], default: 8 },
+    lockedSeats: { type: [Number], default: [] },
     coOwners: { type: [String], default: [] },
     admins: { type: [String], default: [] },
     kickouts: {
