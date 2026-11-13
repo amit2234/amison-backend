@@ -27,12 +27,8 @@ router.post('/zego-config', NewopController.requireNewopAdmin, NewopController.u
 let newopStoreRoutes;
 try {
     newopStoreRoutes = require('../models/newop/store/newopStoreRoutes');
-} catch (e1) {
-    try {
-        newopStoreRoutes = require('../modules/newop/store/newopStoreRoutes');
-    } catch (e2) {
-        console.warn('⚠️ [Newop Router] newopStoreRoutes not found in models or modules:', e2.message);
-    }
+} catch (e) {
+    console.warn('⚠️ [Newop Router] newopStoreRoutes not found:', e.message);
 }
 if (newopStoreRoutes) {
     router.use('/store', newopStoreRoutes);
@@ -150,3 +146,4 @@ router.post('/agencies/hosts/remove', NewopController.requireNewopAdmin, AgencyC
 
 module.exports = router;
 
+    
