@@ -78,8 +78,9 @@ try {
     }
 }
 
-// 8. Dynamic Gifts Public API for Voice Rooms (/api/gifts/active)
-app.get('/api/gifts/active', (req, res) => {
+// 8. Dynamic Gifts API for Voice Rooms (/api/gifts/active)
+const { verifyAuthenticatedUser } = require('./middleware/authMiddleware');
+app.get('/api/gifts/active', verifyAuthenticatedUser, (req, res) => {
     const NewopController = require('./controllers/newopController');
     NewopController.getActiveGifts(req, res);
 });
