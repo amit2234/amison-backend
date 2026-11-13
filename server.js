@@ -44,9 +44,9 @@ app.use('/api/user', usersRoutes);
 const reelsRoutes = require('./routes/reels');
 app.use('/api/reels', reelsRoutes);
 
-// 2. Rooms REST API (/api/rooms)
-const roomsRoutes = require('./routes/rooms');
-app.use('/api/rooms', roomsRoutes);
+// 2. Rooms REST API (/api/rooms) - Fault-Isolated Modular Real-Time Room Engine
+const roomModule = require('./modules/room');
+app.use('/api/rooms', roomModule.routes);
 
 // 3. Messages REST API (/api/messages)
 const messagesRoutes = require('./routes/messages');
@@ -129,9 +129,8 @@ app.use('/api/daily-task', dailyTaskRoutes);
 // MOUNT WEBSOCKET SERVERS WITH DEDICATED UPGRADE ROUTER
 // ============================================================================
 
-// 1. Room Stage WebSocket (/ws/rooms) - 16 seats, stage lock/unlock, room live chat
-const setupRoomSocket = require('./sockets/roomSocket');
-const roomWss = setupRoomSocket(server);
+// 1. Room Stage WebSocket (/ws/rooms) - Fault-Isolated 16-Seat Stage, Lock, Chat & Presence Gateway
+const roomWss = roomModule.gateway.setupRoomSocket(server);
 
 // 2. Personal Chat WebSocket (/ws/chat) - 1-to-1 DM, online presence
 const setupChatSocket = require('./sockets/chatSocket');
