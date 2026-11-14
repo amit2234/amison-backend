@@ -25,6 +25,8 @@ function createEmptySeat(index) {
         isMicTurnedOff: false,
         mutedByRole: '',
         isSpeaking: false,
+        avatarFrame: null,
+        avatarFrameUrl: null,
         seatedAt: null,
         seatLabel: (index + 1).toString()
     };
@@ -238,6 +240,8 @@ function buildSeatUpdatePacket(canonicalRoomId, rawRoomId, seatIndex, seat, kick
         isMuted: Boolean(seat.isMuted),
         isMicTurnedOff: Boolean(seat.isMicTurnedOff),
         isSpeaking: Boolean(seat.isSpeaking),
+        avatarFrame: (seat.avatarFrame === 'null' || !seat.avatarFrame) ? '' : String(seat.avatarFrame),
+        avatarFrameUrl: (seat.avatarFrameUrl === 'null' || !seat.avatarFrameUrl) ? '' : String(seat.avatarFrameUrl),
         ...(kickedUserId ? { kickedUserId: String(kickedUserId) } : {})
     };
 }
