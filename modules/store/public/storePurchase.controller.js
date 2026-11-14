@@ -9,6 +9,7 @@ const cacheService = require('../../../services/cacheService');
 const { resolveUser } = require('../../../utils/userResolver');
 const storeRealtime = require('../store.realtime');
 const { getCategoryHandler } = require('../categories/categoryRegistry');
+const { normalizeCategory } = require('../store.constants');
 
 function computeAuthoritativePrice(basePrice, defaultValidityDays, requestedDays) {
     const safeBase = Math.max(0, Math.floor(Number(basePrice) || 0));
@@ -92,7 +93,7 @@ const storePurchaseController = {
                 : defaultDays;
 
             const cost = computeAuthoritativePrice(item.price, defaultDays, effectiveDays);
-            const useCoins = item.currencyType !== 'diamonds';
+            const useCoins = normalizeCategory(item.category) === 'Frames' || item.currencyType !== 'diamonds';
             const balanceField = useCoins ? 'coins' : 'diamonds';
             const currencyLabel = useCoins ? 'coins' : 'diamonds';
 
