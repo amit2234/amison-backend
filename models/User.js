@@ -28,6 +28,7 @@ const userSchema = new mongoose.Schema({
     isSeller: { type: Boolean, default: false },
     isMerchant: { type: Boolean, default: false },
     sellerCenterRole: { type: String, default: "" }, // "seller", "marchent", or ""
+    roomId: { type: String, default: "", index: true }, // Synced Room displayRoomId (10000+)
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
 });
