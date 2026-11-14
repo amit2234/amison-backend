@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Gift = require('../models/Gift');
+const GiftCategory = require('../models/GiftCategory');
 const NewopAuthService = require('./newopAuthService');
 const cacheService = require('./cacheService');
 const {
@@ -8,37 +9,80 @@ const {
     broadcastGiftCatalogUpdate
 } = require('../utils/giftHelper');
 
+const DEFAULT_BOOTSTRAP_CATEGORIES = [
+    { categoryId: 'cat_popular', name: 'Popular', sortOrder: 0 },
+    { categoryId: 'cat_luxury', name: 'Luxury', sortOrder: 1 },
+    { categoryId: 'cat_lucky', name: 'Lucky', sortOrder: 2 }
+];
+
 async function verifyZeroTrustAdmin(callerUid) {
     if (!callerUid) throw new Error('Zero-Trust Security Error: callerUid is missing');
     const isAuth = await NewopAuthService.isAuthorizedNewopAdmin(callerUid);
     if (!isAuth) throw new Error('Zero-Trust Security Violation: Access denied for unauthorized UID');
 }
 
+async function ensureBootstrapCategoriesIfEmpty() {
+    const totalCount = await GiftCategory.countDocuments({});
+    if (totalCount === 0) {
+        try {
+            await GiftCategory.insertMany(
+                DEFAULT_BOOTSTRAP_CATEGORIES.map((c) => ({
+                    ...c,
+                    isActive: true,
+                    isDeleted: false,
+                    createdBy: 'system'
+                })),
+                { ordered: false }
+            );
+        } catch (_) {}
+    }
+}
+
+async function fetchActiveCategoriesInternal() {
+    await ensureBootstrapCategoriesIfEmpty();
+    const docs = await GiftCategory.find({ isActive: true, isDeleted: { $ne: true } })
+        .sort({ sortOrder: 1, createdAt: 1 })
+        .lean();
+    return (docs || []).map((doc, idx) => ({
+        categoryId: doc.categoryId,
+        id: doc.categoryId,
+        name: doc.name,
+        sortOrder: Number.isFinite(doc.sortOrder) ? doc.sortOrder : idx
+    }));
+}
+
 async function refreshAndBroadcast(action, gift) {
-    await cacheService.invalidateGiftsCatalogCache();
-    const updatedCatalog = await Gift.find({ isActive: true }).sort({ sortOrder: 1, createdAt: -1 }).lean();
-    await cacheService.syncGiftsCatalogCache(updatedCatalog);
+    await Promise.all([
+        cacheService.invalidateGiftsCatalogCache(),
+        cacheService.invalidateGiftCategoriesCache()
+    ]);
+
+    const [updatedCatalog, updatedCategories] = await Promise.all([
+        Gift.find({ isActive: true }).sort({ sortOrder: 1, createdAt: -1 }).lean(),
+        fetchActiveCategoriesInternal()
+    ]);
+
+    await Promise.all([
+        cacheService.syncGiftsCatalogCache(updatedCatalog),
+        cacheService.syncGiftCategoriesCache(updatedCategories)
+    ]);
+
     broadcastGiftCatalogUpdate({
         action,
         gift: gift && gift.toObject ? gift.toObject() : gift,
-        gifts: updatedCatalog
+        gifts: updatedCatalog,
+        categories: updatedCategories
     });
-    return updatedCatalog;
+
+    return { gifts: updatedCatalog, categories: updatedCategories };
 }
 
 const NewopGiftService = {
-    /**
-     * Fetch all gifts for admin panel management (both active and inactive)
-     */
     async getAllGifts(callerUid) {
         await verifyZeroTrustAdmin(callerUid);
         return await Gift.find({}).sort({ sortOrder: 1, createdAt: -1 }).lean();
     },
 
-    /**
-     * Fetch active gifts catalog (Fast <2ms via Redis/RAM cache with MongoDB fallback)
-     * 100% Dynamic from MongoDB - Zero hardcoded gifts
-     */
     async getActiveGifts() {
         const cached = await cacheService.getCachedGiftsCatalog();
         if (cached && Array.isArray(cached) && cached.length > 0) {
@@ -55,43 +99,155 @@ const NewopGiftService = {
         return activeGifts || [];
     },
 
-    /**
-     * Add a new dynamic Gift to MongoDB & Cloudinary
-     */
+    async getActiveCategories() {
+        const cached = await cacheService.getCachedGiftCategories();
+        if (cached && Array.isArray(cached) && cached.length > 0) {
+            return cached;
+        }
+        const categories = await fetchActiveCategoriesInternal();
+        await cacheService.syncGiftCategoriesCache(categories);
+        return categories;
+    },
+
+    async upsertCategory(callerUid, data = {}) {
+        await verifyZeroTrustAdmin(callerUid);
+
+        const cleanName = String(data.name || '').trim();
+        if (!cleanName) throw new Error('Category name is required');
+
+        await ensureBootstrapCategoriesIfEmpty();
+
+        const targetId = data.categoryId ? String(data.categoryId).trim() : '';
+        let existing = targetId
+            ? await GiftCategory.findOne({ categoryId: targetId })
+            : await GiftCategory.findOne({ name: new RegExp(`^${cleanName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') });
+
+        if (existing) {
+            const oldName = existing.name;
+            existing.name = cleanName;
+            existing.isActive = true;
+            existing.isDeleted = false;
+            if (data.sortOrder !== undefined) {
+                existing.sortOrder = parseInt(data.sortOrder, 10) || 0;
+            }
+            await existing.save();
+
+            // Keep existing gifts under renamed category linked seamlessly
+            if (oldName && oldName !== cleanName) {
+                await Gift.updateMany({ category: oldName }, { $set: { category: cleanName } }).catch(() => {});
+            }
+        } else {
+            const count = await GiftCategory.countDocuments({ isDeleted: { $ne: true } });
+            const newId = targetId || `cat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+            existing = await GiftCategory.create({
+                categoryId: newId,
+                name: cleanName,
+                sortOrder: Number.isFinite(Number(data.sortOrder)) ? Number(data.sortOrder) : count,
+                isActive: true,
+                isDeleted: false,
+                createdBy: callerUid
+            });
+        }
+
+        const { categories } = await refreshAndBroadcast('categories_sync', null);
+        return {
+            category: {
+                categoryId: existing.categoryId,
+                id: existing.categoryId,
+                name: existing.name,
+                sortOrder: existing.sortOrder
+            },
+            categories
+        };
+    },
+
+    async deleteCategory(callerUid, categoryId) {
+        await verifyZeroTrustAdmin(callerUid);
+        const cleanId = String(categoryId || '').trim();
+        if (!cleanId) throw new Error('Target category ID is required');
+
+        await ensureBootstrapCategoriesIfEmpty();
+        await GiftCategory.updateOne(
+            { $or: [{ categoryId: cleanId }, { name: cleanId }] },
+            { $set: { isActive: false, isDeleted: true } }
+        );
+
+        const { categories } = await refreshAndBroadcast('categories_sync', null);
+        return { deletedCategoryId: cleanId, categories };
+    },
+
     async addGift(callerUid, data, files = {}) {
         await verifyZeroTrustAdmin(callerUid);
 
-        const { name, coinPrice, category, iconUrl, animationUrl, animationType, sortOrder, isLucky, luckyMultiplierMax, description } = data || {};
+        const { name, coinPrice, category, iconUrl, animationUrl, animationType, sortOrder, isLucky, luckyMultiplierMax, description, isActive } = data || {};
         if (!name) throw new Error('Gift name is required');
 
-        const { finalIconUrl, finalAnimUrl } = await processGiftMediaUploads(files, iconUrl, animationUrl);
-        const resolvedType = animationType || resolveAnimationType(finalAnimUrl, finalIconUrl);
-
         const finalGiftId = data.giftId ? String(data.giftId).trim() : `gf_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        const existingGift = await Gift.findOne({ giftId: finalGiftId });
 
-        const newGift = await Gift.create({
-            giftId: finalGiftId,
-            name: String(name).trim(),
-            coinPrice: Math.max(1, parseInt(coinPrice, 10) || 100),
-            category: category ? String(category).trim() : 'Popular',
-            iconUrl: finalIconUrl,
-            animationUrl: finalAnimUrl,
-            animationType: resolvedType,
-            isActive: true,
-            sortOrder: parseInt(sortOrder, 10) || 0,
-            isLucky: isLucky === true || isLucky === 'true',
-            luckyMultiplierMax: parseInt(luckyMultiplierMax, 10) || 1,
-            description: description ? String(description).trim() : '',
-            createdBy: callerUid
-        });
+        const { finalIconUrl, finalAnimUrl } = await processGiftMediaUploads(
+            files,
+            iconUrl || existingGift?.iconUrl || '',
+            animationUrl || existingGift?.animationUrl || ''
+        );
+        const resolvedType = animationType || resolveAnimationType(finalAnimUrl, finalIconUrl);
+        const resolvedCategory = category ? String(category).trim() : (existingGift?.category || 'Popular');
 
-        await refreshAndBroadcast('create', newGift);
-        return newGift;
+        // Auto-register category in GiftCategory if not marked deleted
+        if (resolvedCategory) {
+            const catExists = await GiftCategory.findOne({
+                name: new RegExp(`^${resolvedCategory.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i')
+            });
+            if (!catExists) {
+                const count = await GiftCategory.countDocuments({ isDeleted: { $ne: true } });
+                await GiftCategory.create({
+                    categoryId: `cat_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                    name: resolvedCategory,
+                    sortOrder: count,
+                    isActive: true,
+                    isDeleted: false,
+                    createdBy: callerUid
+                }).catch(() => {});
+            }
+        }
+
+        let savedGift;
+        if (existingGift) {
+            existingGift.name = String(name).trim();
+            existingGift.coinPrice = Math.max(1, parseInt(coinPrice, 10) || existingGift.coinPrice || 100);
+            existingGift.category = resolvedCategory;
+            existingGift.iconUrl = finalIconUrl;
+            existingGift.animationUrl = finalAnimUrl;
+            existingGift.animationType = resolvedType;
+            if (isActive !== undefined) existingGift.isActive = isActive === true || isActive === 'true';
+            if (sortOrder !== undefined) existingGift.sortOrder = parseInt(sortOrder, 10) || 0;
+            if (isLucky !== undefined) existingGift.isLucky = isLucky === true || isLucky === 'true';
+            if (luckyMultiplierMax !== undefined) existingGift.luckyMultiplierMax = parseInt(luckyMultiplierMax, 10) || 1;
+            if (description !== undefined) existingGift.description = String(description).trim();
+            savedGift = await existingGift.save();
+            await refreshAndBroadcast('update', savedGift);
+        } else {
+            savedGift = await Gift.create({
+                giftId: finalGiftId,
+                name: String(name).trim(),
+                coinPrice: Math.max(1, parseInt(coinPrice, 10) || 100),
+                category: resolvedCategory,
+                iconUrl: finalIconUrl,
+                animationUrl: finalAnimUrl,
+                animationType: resolvedType,
+                isActive: isActive === undefined ? true : (isActive === true || isActive === 'true'),
+                sortOrder: parseInt(sortOrder, 10) || 0,
+                isLucky: isLucky === true || isLucky === 'true',
+                luckyMultiplierMax: parseInt(luckyMultiplierMax, 10) || 1,
+                description: description ? String(description).trim() : '',
+                createdBy: callerUid
+            });
+            await refreshAndBroadcast('create', savedGift);
+        }
+
+        return savedGift;
     },
 
-    /**
-     * Edit existing Gift
-     */
     async editGift(callerUid, targetGiftId, data, files = {}) {
         await verifyZeroTrustAdmin(callerUid);
 
@@ -120,9 +276,6 @@ const NewopGiftService = {
         return gift;
     },
 
-    /**
-     * Delete or Deactivate Gift
-     */
     async deleteGift(callerUid, targetGiftId) {
         await verifyZeroTrustAdmin(callerUid);
 
@@ -136,9 +289,6 @@ const NewopGiftService = {
         return gift || { giftId: targetGiftId };
     },
 
-    /**
-     * Clear / Delete ALL gifts catalog from MongoDB
-     */
     async clearAllGifts(callerUid) {
         await verifyZeroTrustAdmin(callerUid);
         await Gift.deleteMany({});
@@ -146,6 +296,5 @@ const NewopGiftService = {
         return { success: true, message: 'All gifts deleted permanently' };
     }
 };
-
 
 module.exports = NewopGiftService;
