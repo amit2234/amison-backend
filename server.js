@@ -82,16 +82,10 @@ try {
     }
 }
 
-// 8. Dynamic Gifts API for Voice Rooms (/api/gifts/active, /api/gifts/categories)
-const { verifyAuthenticatedUser } = require('./middleware/authMiddleware');
-app.get('/api/gifts/active', verifyAuthenticatedUser, (req, res) => {
-    const NewopController = require('./controllers/newopController');
-    NewopController.getActiveGifts(req, res);
-});
-app.get('/api/gifts/categories', verifyAuthenticatedUser, (req, res) => {
-    const NewopController = require('./controllers/newopController');
-    NewopController.getActiveGiftCategories(req, res);
-});
+// 8. Dynamic Gifts API for Voice Rooms (/api/gifts/active, /api/gifts/categories, /api/gifts/admin)
+const giftModule = require('./modules/gift');
+app.use('/api/gifts', giftModule.publicRoutes);
+app.use('/api/gifts/admin', giftModule.adminRoutes);
 
 // 9. Emojis REST API (/api/emojis)
 const emojisRoutes = require('./routes/emojis');
