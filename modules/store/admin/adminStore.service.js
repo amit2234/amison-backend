@@ -93,6 +93,8 @@ const adminStoreService = {
 
         const metadata = handler.enrichMetadata(clean.metadata || {}, rawData);
 
+        const enforcedCurrencyType = category === 'Frames' ? 'coins' : (clean.currencyType || 'diamonds');
+
         const newItem = await StoreItem.create({
             itemId: finalItemId,
             category,
@@ -108,7 +110,7 @@ const adminStoreService = {
             sortOrder: clean.sortOrder !== undefined ? clean.sortOrder : 10,
             isActive: clean.isActive !== undefined ? clean.isActive : true,
             mediaFormat,
-            currencyType: clean.currencyType || 'diamonds',
+            currencyType: enforcedCurrencyType,
             metadata,
             version: 1
         });
@@ -161,7 +163,11 @@ const adminStoreService = {
         if (clean.description !== undefined) updateFields.description = clean.description;
         if (clean.sortOrder !== undefined) updateFields.sortOrder = clean.sortOrder;
         if (clean.isActive !== undefined) updateFields.isActive = clean.isActive;
-        if (clean.currencyType !== undefined) updateFields.currencyType = clean.currencyType;
+        if (targetCategory === 'Frames') {
+            updateFields.currencyType = 'coins';
+        } else if (clean.currencyType !== undefined) {
+            updateFields.currencyType = clean.currencyType;
+        }
 
         if (clean.metadata !== undefined || rawData.vipNumber !== undefined || rawData.previewTagText !== undefined) {
             updateFields.metadata = handler.enrichMetadata(
