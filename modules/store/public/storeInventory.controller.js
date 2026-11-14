@@ -1,9 +1,83 @@
 const UserInventory = require('../../../models/UserInventory');
+const Room = require('../../../models/Room');
 const cacheService = require('../../../services/cacheService');
+const roomRoleHelper = require('../../../services/roomRoleHelper');
 const { resolveUser } = require('../../../utils/userResolver');
 const storeRealtime = require('../store.realtime');
 const { getCategoryHandler } = require('../categories/categoryRegistry');
 const { normalizeCategory } = require('../store.constants');
+const { channelManager, getBroadcastTargets } = require('../../room/room.channel.manager');
+const roomStateCache = require('../../room/room.state.cache');
+
+async function syncLiveRoomFrameForUser(canonicalUid, frameId, frameUrl) {
+    try {
+        const cleanUid = String(canonicalUid || '').trim();
+        if (!cleanUid) return;
+        const identifiers = await roomRoleHelper.resolveUserIdentifiers(cleanUid);
+        identifiers.add(cleanUid);
+        const idArray = Array.from(identifiers).filter(Boolean);
+        const nextFrameId = frameId && String(frameId).trim() ? String(frameId).trim() : null;
+        const nextFrameUrl = nextFrameId && frameUrl && String(frameUrl).trim() ? String(frameUrl).trim() : null;
+
+        if (cacheService.roomSeatsMap && typeof cacheService.roomSeatsMap.entries === 'function') {
+            for (const [roomId, seats] of cacheService.roomSeatsMap.entries()) {
+                if (!Array.isArray(seats)) continue;
+                const roomMeta = roomRoleHelper.getCachedRoomRoles(roomId);
+                const targets = getBroadcastTargets(roomId, roomId, null, roomMeta);
+                let touchedRoom = false;
+
+                for (let idx = 0; idx < seats.length; idx++) {
+                    const seat = seats[idx];
+                    if (!seat || !seat.userId || seat.userId === 'null') continue;
+                    const occId = String(seat.userId).trim();
+                    const occCustom = String(seat.userCustomId || '').trim();
+                    if (identifiers.has(occId) || (occCustom && identifiers.has(occCustom))) {
+                        seat.avatarFrame = nextFrameId;
+                        seat.avatarFrameUrl = nextFrameUrl;
+                        touchedRoom = true;
+
+                        const seatPacket = roomStateCache.buildSeatUpdatePacket(roomId, roomId, idx, seat);
+                        channelManager.broadcastToRoomTargets(targets, seatPacket);
+                    }
+                }
+
+                const participantsMap = cacheService.getRoomParticipants ? cacheService.getRoomParticipants(roomId) : null;
+                if (participantsMap && typeof participantsMap.forEach === 'function') {
+                    participantsMap.forEach((p, key) => {
+                        const match = identifiers.has(String(key).trim())
+                            || identifiers.has(String(p.userId || '').trim())
+                            || (p.numericId && identifiers.has(String(p.numericId).trim()));
+                        if (match) {
+                            p.avatarFrame = nextFrameId || '';
+                            p.avatarFrameUrl = nextFrameUrl || '';
+                            participantsMap.set(key, p);
+                        }
+                    });
+                }
+
+                if (touchedRoom) {
+                    roomStateCache.persistStateToRedisAsync(roomId, roomMeta);
+                }
+            }
+        }
+
+        if (idArray.length > 0) {
+            await Room.updateMany(
+                { 'seats.userId': { $in: idArray } },
+                {
+                    $set: {
+                        'seats.$[s].avatarFrame': nextFrameId,
+                        'seats.$[s].avatarFrameUrl': nextFrameUrl,
+                        updatedAt: new Date()
+                    }
+                },
+                { arrayFilters: [{ 's.userId': { $in: idArray } }] }
+            ).catch(() => {});
+        }
+    } catch (err) {
+        console.warn('⚠️ [StoreInventoryController] Live room frame sync notice:', err.message);
+    }
+}
 
 async function resolveCanonicalUid(rawId) {
     const clean = String(rawId || '').trim();
@@ -159,6 +233,14 @@ const storeInventoryController = {
                 ownedItems: enriched.ownedItems
             });
 
+            if (normalizedCat === 'Frames') {
+                await syncLiveRoomFrameForUser(
+                    canonicalUid,
+                    enriched.equipped?.frame?.itemId || itemId,
+                    enriched.equipped?.frame?.mediaUrl || mediaUrl || ''
+                );
+            }
+
             return res.json({
                 success: true,
                 message: `Equipped ${itemId}`,
@@ -202,6 +284,10 @@ const storeInventoryController = {
                     equipped: enriched.equipped,
                     ownedItems: enriched.ownedItems
                 });
+            }
+
+            if (normalizedCat === 'Frames') {
+                await syncLiveRoomFrameForUser(canonicalUid, null, null);
             }
 
             return res.json({
