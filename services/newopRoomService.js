@@ -2,6 +2,10 @@ const mongoose = require('mongoose');
 const Room = require('../models/Room');
 const User = require('../models/User');
 const NewopAuthService = require('./newopAuthService');
+const identityModule = require('../modules/identity');
+const { channelManager, getBroadcastTargets } = require('../modules/room/room.channel.manager');
+const roomRoleHelper = require('./roomRoleHelper');
+const roomDiscoveryActivity = require('../modules/room/activities/roomDiscovery.activity');
 
 const getCoreUserModel = () => mongoose.models.User || User;
 
@@ -138,7 +142,7 @@ const NewopRoomService = {
     },
 
     /**
-     * Update room details
+     * Update room details (Admin-only displayRoomId edit with zero data loss and immutable roomId === ownerUid)
      */
     async updateRoomDetails(callerUid, data) {
         await verifyZeroTrustAdmin(callerUid);
@@ -147,23 +151,67 @@ const NewopRoomService = {
         const targetId = String(roomId || displayRoomId || '').trim();
         if (!targetId) throw new Error('roomId is required');
 
+        const existingRoom = await Room.findOne({
+            $or: [
+                { displayRoomId: targetId },
+                { roomId: targetId },
+                { ownerUid: targetId },
+                { _id: targetId.match(/^[0-9a-fA-F]{24}$/) ? targetId : null }
+            ]
+        }).lean();
+
+        if (!existingRoom) throw new Error('Room not found');
+
+        const permanentOwnerUid = String(existingRoom.ownerUid || existingRoom.roomId || '').trim();
         const updateFields = { updatedAt: new Date() };
-        if (roomName !== undefined && typeof roomName === 'string') updateFields.roomName = roomName.trim();
-        if (displayRoomId !== undefined) {
-            updateFields.displayRoomId = String(displayRoomId).trim();
-            updateFields.roomId = String(displayRoomId).trim();
+        // Ensure internal roomId always stays locked to permanent ownerUid
+        if (permanentOwnerUid && existingRoom.roomId !== permanentOwnerUid) {
+            updateFields.roomId = permanentOwnerUid;
+        }
+        if (roomName !== undefined && typeof roomName === 'string' && roomName.trim().length > 0) {
+            updateFields.roomName = roomName.trim();
+        }
+        if (displayRoomId !== undefined && String(displayRoomId).trim().length > 0) {
+            const validatedDisplayId = await identityModule.validateAdminRoomDisplayId(displayRoomId, permanentOwnerUid);
+            updateFields.displayRoomId = validatedDisplayId;
         }
         if (level !== undefined && !isNaN(Number(level))) updateFields.level = Number(level);
         if (coOwners !== undefined && Array.isArray(coOwners)) updateFields.coOwners = coOwners;
         if (admins !== undefined && Array.isArray(admins)) updateFields.admins = admins;
 
         const updated = await Room.findOneAndUpdate(
-            { $or: [{ displayRoomId: targetId }, { roomId: targetId }, { ownerUid: targetId }, { _id: targetId.match(/^[0-9a-fA-F]{24}$/) ? targetId : null }] },
+            { _id: existingRoom._id },
             { $set: updateFields },
             { new: true }
         ).lean();
 
         if (!updated) throw new Error('Room not found');
+
+        if (updateFields.displayRoomId && permanentOwnerUid) {
+            const CoreUser = getCoreUserModel();
+            await CoreUser.updateOne(
+                { uid: permanentOwnerUid },
+                { $set: { roomId: updateFields.displayRoomId, updatedAt: new Date() } }
+            ).catch(() => {});
+
+            channelManager.registerAlias(updateFields.displayRoomId, permanentOwnerUid);
+            channelManager.registerAlias(permanentOwnerUid, permanentOwnerUid);
+            roomRoleHelper.cacheRoomRoles(updated);
+
+            const targets = getBroadcastTargets(permanentOwnerUid, updateFields.displayRoomId, null, updated);
+            channelManager.broadcastToRoomTargets(targets, {
+                type: 'room:settings_updated',
+                roomId: permanentOwnerUid,
+                displayRoomId: updateFields.displayRoomId,
+                roomName: updated.roomName || '',
+                announcement: updated.announcement || '',
+                backgroundUrl: updated.backgroundUrl || '',
+                roomPhotoUrl: updated.roomPhotoUrl || '',
+                timestamp: Date.now()
+            });
+        }
+
+        roomDiscoveryActivity.invalidateCache();
         return updated;
     },
 
