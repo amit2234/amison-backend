@@ -8,6 +8,7 @@ const Family = require('../../../models/Family');
 const WalletTransaction = require('../../../models/Transaction');
 const Gift = require('../../../models/Gift');
 const ProfileVisitor = require('../../../models/ProfileVisitor');
+const { MAX_EQUIPPED_BADGES } = require('../profile.constants');
 
 /**
  * Resolves either Firebase Auth UID or 9-digit Numeric ID into the canonical User document.
@@ -172,7 +173,7 @@ async function getProfileSummary(targetIdentifier, viewerUid) {
             isBanned: Boolean(userDoc.isBanned),
             equippedFrameId: equipped.frame?.itemId || '',
             equippedFrameUrl: equipped.frame?.mediaUrl || '',
-            equippedBadges: Array.isArray(userDoc.equippedBadges) ? userDoc.equippedBadges.slice(0, 3) : []
+            equippedBadges: Array.isArray(userDoc.equippedBadges) ? userDoc.equippedBadges.slice(0, MAX_EQUIPPED_BADGES) : []
         },
         stats: {
             friendsCount,
