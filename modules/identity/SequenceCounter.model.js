@@ -1,4 +1,4 @@
-mongoose = require('mongoose');
+const mongoose = require('mongoose');
 
 /**
  * SequenceCounter Model (sequence_counters collection)
