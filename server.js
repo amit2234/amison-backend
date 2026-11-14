@@ -53,9 +53,9 @@ app.use('/api/reels', reelsModule.routes);
 const roomModule = require('./modules/room');
 app.use('/api/rooms', roomModule.routes);
 
-// 3. Messages REST API (/api/messages)
-const messagesRoutes = require('./routes/messages');
-app.use('/api/messages', messagesRoutes);
+// 3. Messages REST API (/api/messages) - Modular Direct Messaging Engine
+const messagingModule = require('./modules/messaging');
+app.use('/api/messages', messagingModule.routes);
 
 // 4. Wallet REST API (/api/wallet, /api/gift)
 const walletRoutes = require('./routes/wallet');
@@ -136,9 +136,8 @@ app.use('/api/daily-task', dailyTaskRoutes);
 // 1. Room Stage WebSocket (/ws/rooms) - Fault-Isolated 16-Seat Stage, Lock, Chat & Presence Gateway
 const roomWss = roomModule.gateway.setupRoomSocket(server);
 
-// 2. Personal Chat WebSocket (/ws/chat) - 1-to-1 DM, online presence
-const setupChatSocket = require('./sockets/chatSocket');
-const chatWss = setupChatSocket(server);
+// 2. Personal Chat WebSocket (/ws/chat) - Modular 1-to-1 DM & online presence
+const chatWss = messagingModule.gateway.setupChatSocket(server);
 
 // 3. 24/7 Authoritative Game Engine WebSocket (/ws/games, /ws/games/galaxy_star)
 const setupGameSocket = require('./sockets/gameSocket');
