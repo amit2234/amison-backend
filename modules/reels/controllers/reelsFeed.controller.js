@@ -114,9 +114,20 @@ async function getFeed(req, res) {
  */
 async function getUserReels(req, res) {
     try {
-        const targetUid = String(req.params.userUid || '').trim();
-        if (!targetUid) {
+        const rawIdentifier = String(req.params.userUid || '').trim();
+        if (!rawIdentifier) {
             return res.status(400).json({ success: false, error: 'Missing userUid' });
+        }
+
+        let targetUid = rawIdentifier;
+        // Resolve 9-digit numericId -> permanent Auth UID if caller passed numericId
+        if (/^\d+$/.test(rawIdentifier)) {
+            const matchedUser = await User.findOne({ numericId: Number(rawIdentifier) })
+                .select('uid')
+                .lean();
+            if (matchedUser && matchedUser.uid) {
+                targetUid = matchedUser.uid;
+            }
         }
 
         const filterType = normalizeFeedFilter(req.query.mediaType);
