@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { verifyAuthenticatedUser } = require('../../../middleware/authMiddleware');
+const { verifyAuthenticatedUser } = require('../../middleware/authMiddleware');
 
 const readController = require('./controllers/profileRead.controller');
 const socialController = require('./controllers/profileSocial.controller');
