@@ -52,6 +52,8 @@ const roomSchema = new mongoose.Schema({
             isMuted: { type: Boolean, default: false },
             isMicTurnedOff: { type: Boolean, default: false },
             isSpeaking: { type: Boolean, default: false },
+            avatarFrame: { type: String, default: null },
+            avatarFrameUrl: { type: String, default: null },
             seatLabel: { type: String, default: "" }
         }],
         default: () => Array.from({ length: 16 }, (_, i) => ({
@@ -69,6 +71,8 @@ const roomSchema = new mongoose.Schema({
             isMuted: false,
             isMicTurnedOff: false,
             isSpeaking: false,
+            avatarFrame: null,
+            avatarFrameUrl: null,
             seatLabel: (i + 1).toString()
         }))
     },
