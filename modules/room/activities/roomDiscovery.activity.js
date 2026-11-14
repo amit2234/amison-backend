@@ -80,9 +80,11 @@ const roomDiscoveryActivity = {
 
             const liveCount = Number(r.onlineCount || 0);
             const heat = Number(r.heatScore || 0);
+            const cleanDisplayId = String(r.displayRoomId || '').trim();
             formattedRooms.push({
-                id: r.displayRoomId || r.roomId || r._id,
-                publicRoomId: r.displayRoomId || r.roomId,
+                id: cleanDisplayId || r._id,
+                publicRoomId: cleanDisplayId,
+                displayRoomId: cleanDisplayId,
                 roomId: r.roomId || r.ownerUid,
                 title: r.roomName || 'Voice Room',
                 roomName: r.roomName || 'Voice Room',
@@ -92,7 +94,7 @@ const roomDiscoveryActivity = {
                 ownerUid: r.ownerUid || '',
                 coOwners: Array.isArray(r.coOwners) ? r.coOwners : [],
                 admins: Array.isArray(r.admins) ? r.admins : [],
-                ownerNumericId: ownerNumericId || r.displayRoomId || '102030',
+                ownerNumericId: ownerNumericId,
                 roomLevel: ownerLevel,
                 photoUri: r.roomPhotoUrl || '',
                 roomPhotoUrl: r.roomPhotoUrl || '',
@@ -115,24 +117,52 @@ const roomDiscoveryActivity = {
         const cleanQuery = String(query || '').trim();
         if (!cleanQuery) return [];
         const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(escaped, 'i');
+        const isDigitsOnly = /^\d+$/.test(cleanQuery);
 
-        const matched = await Room.find({
-            isBlocked: { $ne: true },
-            $or: [
-                { displayRoomId: regex },
-                { roomId: regex },
-                { ownerUid: regex },
-                { roomName: regex },
-                { category: regex }
-            ]
-        })
+        // Zero-Trust Backend Search:
+        // Numeric queries search strictly by displayRoomId (exact/prefix first) + roomName;
+        // Text queries search roomName / category (never expose or match internal ownerUid/roomId).
+        const filter = isDigitsOnly
+            ? {
+                isBlocked: { $ne: true },
+                $or: [
+                    { displayRoomId: cleanQuery },
+                    { displayRoomId: new RegExp(`^${escaped}`) },
+                    { displayRoomId: new RegExp(escaped, 'i') },
+                    { roomName: new RegExp(escaped, 'i') }
+                ]
+            }
+            : {
+                isBlocked: { $ne: true },
+                $or: [
+                    { roomName: new RegExp(escaped, 'i') },
+                    { category: new RegExp(escaped, 'i') }
+                ]
+            };
+
+        const matched = await Room.find(filter)
             .sort({ isLive: -1, onlineCount: -1, updatedAt: -1 })
-            .limit(30)
+            .limit(40)
             .lean();
 
+        // Rank exact displayRoomId match > prefix displayRoomId > live > title match
+        matched.sort((a, b) => {
+            const aDisp = String(a.displayRoomId || '').trim();
+            const bDisp = String(b.displayRoomId || '').trim();
+            const score = (disp, r) => {
+                if (disp === cleanQuery) return 1000;
+                if (disp.startsWith(cleanQuery)) return 500;
+                if (disp.includes(cleanQuery)) return 200;
+                if (String(r.roomName || '').toLowerCase().startsWith(cleanQuery.toLowerCase())) return 100;
+                return 0;
+            };
+            const diff = score(bDisp, b) - score(aDisp, a);
+            if (diff !== 0) return diff;
+            return (b.isLive ? 1 : 0) - (a.isLive ? 1 : 0);
+        });
+
         const results = [];
-        for (const r of matched) {
+        for (const r of matched.slice(0, 30)) {
             let ownerNumericId = '';
             let ownerLevel = 1;
             const ownerUid = r.ownerUid || r.roomId;
@@ -145,9 +175,11 @@ const roomDiscoveryActivity = {
                     if (ownerUser.level) ownerLevel = ownerUser.level;
                 }
             }
+            const cleanDisplayId = String(r.displayRoomId || '').trim();
             results.push({
-                id: r.displayRoomId || r.roomId || r._id,
-                publicRoomId: r.displayRoomId || r.roomId,
+                id: cleanDisplayId || r._id,
+                publicRoomId: cleanDisplayId,
+                displayRoomId: cleanDisplayId,
                 roomId: r.roomId || r.ownerUid,
                 title: r.roomName || 'Voice Room',
                 roomName: r.roomName || 'Voice Room',
@@ -157,7 +189,7 @@ const roomDiscoveryActivity = {
                 ownerUid: r.ownerUid || '',
                 coOwners: Array.isArray(r.coOwners) ? r.coOwners : [],
                 admins: Array.isArray(r.admins) ? r.admins : [],
-                ownerNumericId: ownerNumericId || r.displayRoomId || '102030',
+                ownerNumericId: ownerNumericId,
                 roomLevel: ownerLevel,
                 photoUri: r.roomPhotoUrl || '',
                 roomPhotoUrl: r.roomPhotoUrl || '',
