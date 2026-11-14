@@ -20,7 +20,10 @@ const reelSchema = new mongoose.Schema({
     videoHlsUrl: { type: String, required: true },          // .m3u8 adaptive stream URL
     coverUrl: { type: String, required: true },              // Poster frame .jpg
     mediaType: { type: String, enum: ['VIDEO', 'PHOTO'], default: 'VIDEO' },
+    aspectRatio: { type: Number, default: 0 },               // Natural width/height (e.g., 1.77 for 16:9, 0.56 for 9:16)
     durationSeconds: { type: Number, default: 30 },          // 0-30s crop
+    trimStartSec: { type: Number, default: 0 },
+    trimEndSec: { type: Number, default: 30 },
     
     // Description & Hashtags
     caption: { type: String, default: "" },
