@@ -327,15 +327,8 @@ async function resolveTrueOwnerUid(inputUid) {
 }
 
 async function generateUnique6DigitId() {
-    let attempts = 0;
-    while (attempts < 30) {
-        const id = Math.floor(100000 + Math.random() * 900000).toString();
-        const existingRoom = await Room.findOne({ $or: [{ displayRoomId: id }, { roomId: id }] }).select('_id').lean();
-        const existingUser = await User.findOne({ $or: [{ roomId: id }, { numericId: Number(id) }] }).select('_id').lean();
-        if (!existingRoom && !existingUser) return id;
-        attempts++;
-    }
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    const identity = require('../identity');
+    return identity.getNextRoomDisplayId();
 }
 
 module.exports = {
