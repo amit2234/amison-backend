@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const User = require('../models/User');
 const Room = require('../models/Room');
 const NewopAuthService = require('./newopAuthService');
+const identityModule = require('../modules/identity');
 
 const getCoreUserModel = () => mongoose.models.User || User;
 
@@ -98,11 +99,16 @@ const NewopUserService = {
         if (!targetId) throw new Error('userId / uid is required');
 
         const CoreUser = getCoreUserModel();
-        const updateFields = { updatedAt: new Date() };
+        const existingUser = await CoreUser.findOne({
+            $or: [{ uid: targetId }, { _id: targetId.match(/^[0-9a-fA-F]{24}$/) ? targetId : null }, { numericId: Number(targetId) || null }]
+        }).lean();
 
+        if (!existingUser) throw new Error('User not found');
+
+        const updateFields = { updatedAt: new Date() };
         const rawNumId = numericId !== undefined ? numericId : id;
         if (rawNumId !== undefined && !isNaN(Number(rawNumId)) && Number(rawNumId) > 0) {
-            updateFields.numericId = Number(rawNumId);
+            updateFields.numericId = await identityModule.validateAdminUserNumericId(rawNumId, existingUser.uid);
         }
         if (coins !== undefined && !isNaN(Number(coins))) updateFields.coins = Number(coins);
         if (goldCoin !== undefined && !isNaN(Number(goldCoin))) updateFields.coins = Number(goldCoin);
@@ -111,23 +117,23 @@ const NewopUserService = {
         if (gender !== undefined && typeof gender === 'string') updateFields.gender = gender.trim();
         if (country !== undefined && typeof country === 'string') updateFields.country = country.trim();
         if (roomId !== undefined && typeof roomId === 'string' && roomId.trim().length > 0) {
-            updateFields.roomId = roomId.trim();
+            updateFields.roomId = await identityModule.validateAdminRoomDisplayId(roomId.trim(), existingUser.uid);
         }
         if (email !== undefined && typeof email === 'string') updateFields.email = email.trim();
         if (googleEmail !== undefined && typeof googleEmail === 'string') updateFields.email = googleEmail.trim();
         if (role !== undefined && typeof role === 'string') updateFields.role = role.trim();
 
         const updated = await CoreUser.findOneAndUpdate(
-            { $or: [{ uid: targetId }, { _id: targetId.match(/^[0-9a-fA-F]{24}$/) ? targetId : null }, { numericId: Number(targetId) || null }] },
+            { _id: existingUser._id },
             { $set: updateFields },
             { new: true }
         ).lean();
 
         if (!updated) throw new Error('User not found');
 
-        if (roomId !== undefined && typeof roomId === 'string' && roomId.trim().length > 0) {
-            const cleanDispId = roomId.trim();
-            const ownerKey = updated.uid || targetId;
+        if (updateFields.roomId) {
+            const cleanDispId = updateFields.roomId;
+            const ownerKey = updated.uid || existingUser.uid;
             await Room.updateOne(
                 { $or: [{ ownerUid: ownerKey }, { roomId: ownerKey }] },
                 { $set: { displayRoomId: cleanDispId, updatedAt: new Date() } }
