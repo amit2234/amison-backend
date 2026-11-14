@@ -37,6 +37,10 @@ const giftUploadMiddleware = upload.fields([
 
 router.get('/gifts', NewopController.requireNewopAdmin, NewopController.getGifts);
 router.get('/gifts/active', verifyAuthenticatedUser, NewopController.getActiveGifts);
+router.get('/gifts/categories', verifyAuthenticatedUser, NewopController.getActiveGiftCategories);
+router.post('/gifts/categories', NewopController.requireNewopAdmin, NewopController.upsertGiftCategory);
+router.delete('/gifts/categories/:categoryId', NewopController.requireNewopAdmin, NewopController.deleteGiftCategory);
+router.post('/gifts/categories/delete', NewopController.requireNewopAdmin, NewopController.deleteGiftCategory);
 router.post('/gifts/create', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
 router.post('/gifts/add', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
 router.put('/gifts/edit/:giftId', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
@@ -139,5 +143,4 @@ router.post('/agencies/hosts/add', NewopController.requireNewopAdmin, AgencyCont
 router.post('/agencies/hosts/remove', NewopController.requireNewopAdmin, AgencyController.removeHost);
 
 module.exports = router;
-
 
