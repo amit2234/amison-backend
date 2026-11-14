@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { verifyAuthenticatedUser } = require('../../../middleware/authMiddleware');
+const { verifyAuthenticatedUser } = require('../../middleware/authMiddleware');
 
 const feedController = require('./controllers/reelsFeed.controller');
 const actionController = require('./controllers/reelsAction.controller');
