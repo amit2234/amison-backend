@@ -2,7 +2,8 @@ const Room = require('../../../models/Room');
 const User = require('../../../models/User');
 const roomRoleHelper = require('../../../services/roomRoleHelper');
 const { VALID_STAGE_CAPACITIES, DEFAULT_STAGE_CAPACITY, normalizeStageCapacity } = require('../room.constants');
-const { channelManager, resolveTrueOwnerUid, generateUnique6DigitId, getBroadcastTargets } = require('../room.channel.manager');
+const { channelManager, resolveTrueOwnerUid, getBroadcastTargets } = require('../room.channel.manager');
+const identityModule = require('../../identity');
 const roomStateCache = require('../room.state.cache');
 const roomDiscoveryActivity = require('./roomDiscovery.activity');
 
@@ -98,8 +99,9 @@ const roomSettingsActivity = {
             if (announcement !== undefined) room.announcement = announcement;
             if (isLocked !== undefined) room.isLocked = Boolean(isLocked);
             if (pinCode !== undefined) room.pinCode = pinCode;
-            if (displayRoomId !== undefined && String(displayRoomId).trim().length > 0) {
-                room.displayRoomId = String(displayRoomId).trim();
+            // Zero-Trust: displayRoomId can ONLY be modified by Backend Admin, never by client room updates.
+            if (!room.displayRoomId || !/^\d{5,9}$/.test(String(room.displayRoomId).trim())) {
+                room.displayRoomId = await identityModule.getNextRoomDisplayId();
             }
             const parsedRequestedSlots = Number(speakerSlots);
             if (speakerSlots !== undefined && speakerSlots !== null && VALID_STAGE_CAPACITIES.includes(parsedRequestedSlots)) {
@@ -116,24 +118,24 @@ const roomSettingsActivity = {
                 err.statusCode = 403;
                 throw err;
             }
-            const sixDigitId = (displayRoomId && String(displayRoomId).trim().length > 0)
-                ? String(displayRoomId).trim()
-                : await generateUnique6DigitId();
-            room = await Room.create({
-                roomId: cleanUid,
-                ownerUid: cleanUid,
-                displayRoomId: sixDigitId,
-                roomName: effectiveTitle,
-                roomPhotoUrl: effectiveCover,
-                backgroundUrl: backgroundUrl || '',
-                category: category || 'Voice Party',
-                announcement: announcement || 'Welcome to my room!',
-                speakerSlots: normalizeStageCapacity(speakerSlots, DEFAULT_STAGE_CAPACITY),
-                isLocked: Boolean(isLocked),
-                pinCode: pinCode || '',
-                isLive: false,
-                onlineCount: 0,
-                heatScore: 0
+            // Zero-Trust: First-time room creation always generates displayRoomId atomically on backend (10000+, +10..25)
+            room = await identityModule.createRoomWithUniqueDisplayId(async (allocatedDisplayId) => {
+                return Room.create({
+                    roomId: cleanUid,
+                    ownerUid: cleanUid,
+                    displayRoomId: allocatedDisplayId,
+                    roomName: effectiveTitle,
+                    roomPhotoUrl: effectiveCover,
+                    backgroundUrl: backgroundUrl || '',
+                    category: category || 'Voice Party',
+                    announcement: announcement || 'Welcome to my room!',
+                    speakerSlots: normalizeStageCapacity(speakerSlots, DEFAULT_STAGE_CAPACITY),
+                    isLocked: Boolean(isLocked),
+                    pinCode: pinCode || '',
+                    isLive: false,
+                    onlineCount: 0,
+                    heatScore: 0
+                });
             });
         }
 
