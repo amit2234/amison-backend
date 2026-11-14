@@ -2,13 +2,13 @@ const mongoose = require('mongoose');
 
 // ============================================================================
 // MONGOOSE SCHEMA: ROOMS COLLECTION (100% MongoDB Atlas + Redis In-Memory)
-// Permanent link with Owner UID - 6-Digit Display ID - 16-Seat Grid
+// Permanent link with Owner UID - 5-Digit Display ID (10000+) - 16-Seat Grid
 // ============================================================================
 const roomSchema = new mongoose.Schema({
     roomId: { type: String, required: true, unique: true, index: true }, // Strictly equal to ownerUid for permanent 1:1 link
     ownerUid: { type: String, required: true, unique: true, index: true }, // Permanent Firebase Auth UID
     ownerName: { type: String, default: "Host" },
-    displayRoomId: { type: String, required: true, unique: true, index: true }, // Exact 6-digit room display ID (e.g. "100251")
+    displayRoomId: { type: String, required: true, unique: true, index: true }, // Sequential 5-digit room display ID starting 10000 (e.g. "10131")
     roomName: { type: String, required: true, trim: true, default: "Voice Party" }, // Room Title / Name
     roomPhotoUrl: { type: String, default: "" }, // Room profile photo URL
     roomCover: { type: String, default: "" }, // Alias for room photo URL
