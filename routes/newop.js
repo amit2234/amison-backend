@@ -28,28 +28,11 @@ router.post('/zego-config', NewopController.requireNewopAdmin, NewopController.u
 const newopStoreRoutes = require('../modules/store/admin/adminStore.routes');
 router.use('/store', newopStoreRoutes);
 
-// Dynamic Voice Room Gifts Endpoints (100% Pure MongoDB + Cloudinary + Redis + WS)
+// Dynamic Voice Room Gifts Endpoints (100% Backend-Driven Modular Architecture)
+const newopGiftRoutes = require('../modules/gift/admin/adminGift.routes');
+router.use('/gifts', newopGiftRoutes);
+
 const { upload } = require('../services/cloudinaryService');
-const giftUploadMiddleware = upload.fields([
-    { name: 'iconFile', maxCount: 1 },
-    { name: 'animFile', maxCount: 1 }
-]);
-
-router.get('/gifts', NewopController.requireNewopAdmin, NewopController.getGifts);
-router.get('/gifts/active', verifyAuthenticatedUser, NewopController.getActiveGifts);
-router.get('/gifts/categories', verifyAuthenticatedUser, NewopController.getActiveGiftCategories);
-router.post('/gifts/categories', NewopController.requireNewopAdmin, NewopController.upsertGiftCategory);
-router.delete('/gifts/categories/:categoryId', NewopController.requireNewopAdmin, NewopController.deleteGiftCategory);
-router.post('/gifts/categories/delete', NewopController.requireNewopAdmin, NewopController.deleteGiftCategory);
-router.post('/gifts/create', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
-router.post('/gifts/add', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.addGift);
-router.put('/gifts/edit/:giftId', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
-router.post('/gifts/edit', NewopController.requireNewopAdmin, giftUploadMiddleware, NewopController.editGift);
-router.delete('/gifts/delete/:giftId', NewopController.requireNewopAdmin, NewopController.deleteGift);
-router.post('/gifts/delete', NewopController.requireNewopAdmin, NewopController.deleteGift);
-router.delete('/gifts/clear', NewopController.requireNewopAdmin, NewopController.clearAllGifts);
-router.post('/gifts/clear', NewopController.requireNewopAdmin, NewopController.clearAllGifts);
-
 
 const emojiUploadMiddleware = upload.fields([
     { name: 'mediaFile', maxCount: 1 },
