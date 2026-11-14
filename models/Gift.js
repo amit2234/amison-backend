@@ -37,8 +37,16 @@ const giftSchema = new mongoose.Schema({
     },
     animationType: { 
         type: String, 
-        enum: ['SVGA_ANIMATION', 'GIF_ANIMATION', 'SVG_ANIMATION', 'CUSTOM_MEDIA'],
+        enum: ['SVGA_ANIMATION', 'GIF_ANIMATION', 'SVG_ANIMATION', 'PAG_ANIMATION', 'LOTTIE_ANIMATION', 'CUSTOM_MEDIA'],
         default: 'SVGA_ANIMATION' 
+    },
+    mediaFormat: {
+        type: String,
+        default: 'SVGA'
+    },
+    isBroadcast: {
+        type: Boolean,
+        default: false
     },
     isActive: { 
         type: Boolean, 
