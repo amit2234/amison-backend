@@ -229,113 +229,18 @@ const NewopController = {
     },
 
     // =========================================================================
-    // DYNAMIC GIFT CONTROLLERS (100% PURE MONGODB + CLOUDINARY + REDIS + WS)
+    // DYNAMIC GIFT CONTROLLERS (DELEGATED TO MODULAR /modules/gift)
     // =========================================================================
 
-    async getGifts(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const gifts = await NewopGiftService.getAllGifts(req.callerUid);
-            res.json({ success: true, count: gifts.length, gifts });
-        } catch (e) {
-            console.error('[NewopController] getGifts error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
-
-    async getActiveGifts(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const [gifts, categories] = await Promise.all([
-                NewopGiftService.getActiveGifts(),
-                NewopGiftService.getActiveCategories()
-            ]);
-            res.json({ success: true, count: gifts.length, gifts, categories });
-        } catch (e) {
-            console.error('[NewopController] getActiveGifts error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
-
-    async getActiveGiftCategories(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const categories = await NewopGiftService.getActiveCategories();
-            res.json({ success: true, count: categories.length, categories });
-        } catch (e) {
-            console.error('[NewopController] getActiveGiftCategories error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
-
-    async upsertGiftCategory(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const result = await NewopGiftService.upsertCategory(req.callerUid, req.body);
-            res.json({ success: true, ...result });
-        } catch (e) {
-            console.error('[NewopController] upsertGiftCategory error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
-
-    async deleteGiftCategory(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const categoryId = req.params.categoryId || req.body?.categoryId;
-            const result = await NewopGiftService.deleteCategory(req.callerUid, categoryId);
-            res.json({ success: true, ...result });
-        } catch (e) {
-            console.error('[NewopController] deleteGiftCategory error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
-
-    async addGift(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const gift = await NewopGiftService.addGift(req.callerUid, req.body, req.files);
-            res.json({ success: true, message: 'Gift published successfully', gift });
-        } catch (e) {
-            console.error('[NewopController] addGift error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
-
-    async editGift(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const { giftId } = req.params;
-            const gift = await NewopGiftService.editGift(req.callerUid, giftId || req.body.giftId, req.body, req.files);
-            res.json({ success: true, message: 'Gift updated successfully', gift });
-        } catch (e) {
-            console.error('[NewopController] editGift error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
-
-    async deleteGift(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const { giftId } = req.params;
-            const gift = await NewopGiftService.deleteGift(req.callerUid, giftId || req.body.giftId);
-            res.json({ success: true, message: 'Gift deleted successfully', gift });
-        } catch (e) {
-            console.error('[NewopController] deleteGift error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
-
-    async clearAllGifts(req, res) {
-        try {
-            const NewopGiftService = require('../services/newopGiftService');
-            const result = await NewopGiftService.clearAllGifts(req.callerUid);
-            res.json({ success: true, message: 'All gifts deleted successfully', result });
-        } catch (e) {
-            console.error('[NewopController] clearAllGifts error:', e);
-            res.status(500).json({ success: false, error: e.message });
-        }
-    },
+    getGifts: (req, res) => require('../modules/gift/admin/adminGift.controller').getGifts(req, res),
+    getActiveGifts: (req, res) => require('../modules/gift/admin/adminGift.controller').getActiveGifts(req, res),
+    getActiveGiftCategories: (req, res) => require('../modules/gift/admin/adminGift.controller').getActiveGiftCategories(req, res),
+    upsertGiftCategory: (req, res) => require('../modules/gift/admin/adminGift.controller').upsertGiftCategory(req, res),
+    deleteGiftCategory: (req, res) => require('../modules/gift/admin/adminGift.controller').deleteGiftCategory(req, res),
+    addGift: (req, res) => require('../modules/gift/admin/adminGift.controller').addGift(req, res),
+    editGift: (req, res) => require('../modules/gift/admin/adminGift.controller').editGift(req, res),
+    deleteGift: (req, res) => require('../modules/gift/admin/adminGift.controller').deleteGift(req, res),
+    clearAllGifts: (req, res) => require('../modules/gift/admin/adminGift.controller').clearAllGifts(req, res),
 
 
     // =========================================================================
