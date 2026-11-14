@@ -246,10 +246,47 @@ const NewopController = {
     async getActiveGifts(req, res) {
         try {
             const NewopGiftService = require('../services/newopGiftService');
-            const gifts = await NewopGiftService.getActiveGifts();
-            res.json({ success: true, count: gifts.length, gifts });
+            const [gifts, categories] = await Promise.all([
+                NewopGiftService.getActiveGifts(),
+                NewopGiftService.getActiveCategories()
+            ]);
+            res.json({ success: true, count: gifts.length, gifts, categories });
         } catch (e) {
             console.error('[NewopController] getActiveGifts error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async getActiveGiftCategories(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const categories = await NewopGiftService.getActiveCategories();
+            res.json({ success: true, count: categories.length, categories });
+        } catch (e) {
+            console.error('[NewopController] getActiveGiftCategories error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async upsertGiftCategory(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const result = await NewopGiftService.upsertCategory(req.callerUid, req.body);
+            res.json({ success: true, ...result });
+        } catch (e) {
+            console.error('[NewopController] upsertGiftCategory error:', e);
+            res.status(500).json({ success: false, error: e.message });
+        }
+    },
+
+    async deleteGiftCategory(req, res) {
+        try {
+            const NewopGiftService = require('../services/newopGiftService');
+            const categoryId = req.params.categoryId || req.body?.categoryId;
+            const result = await NewopGiftService.deleteCategory(req.callerUid, categoryId);
+            res.json({ success: true, ...result });
+        } catch (e) {
+            console.error('[NewopController] deleteGiftCategory error:', e);
             res.status(500).json({ success: false, error: e.message });
         }
     },
@@ -353,4 +390,3 @@ const NewopController = {
 };
 
 module.exports = NewopController;
-
