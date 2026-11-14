@@ -357,7 +357,7 @@ router.post('/user/create', verifyStrictFirebaseToken, handleCreateUser);
 // 5. POST /update-profile or POST /user/update-profile - Updates authenticated caller's profile
 async function handleUpdateProfile(req, res) {
     try {
-        const { name, avatarUrl, dob, gender, country } = req.body || {};
+        const { name, avatarUrl, backgroundUrl, backgroundUrls, equippedBadges, dob, gender, country } = req.body || {};
         const cleanUid = String(req.callerUid || '').trim();
         if (!cleanUid) return res.status(401).json({ success: false, error: 'Missing verified UID' });
 
@@ -371,10 +371,32 @@ async function handleUpdateProfile(req, res) {
                 user.name = trimmed;
             }
         }
-        if (avatarUrl !== undefined && avatarUrl !== "") user.avatarUrl = avatarUrl;
-        if (dob !== undefined && dob !== "") user.dob = dob;
-        if (gender !== undefined && gender !== "") user.gender = gender;
-        if (country !== undefined && country !== "") user.country = country;
+        if (typeof avatarUrl === 'string' && avatarUrl.trim().length > 0) {
+            user.avatarUrl = avatarUrl.trim();
+        }
+        if (Array.isArray(backgroundUrls)) {
+            user.backgroundUrls = backgroundUrls
+                .map(u => String(u || '').trim())
+                .filter(Boolean)
+                .slice(0, 8);
+        } else if (typeof backgroundUrl === 'string') {
+            user.backgroundUrls = backgroundUrl
+                .split(',')
+                .map(u => u.trim())
+                .filter(Boolean)
+                .slice(0, 8);
+        }
+        if (Array.isArray(equippedBadges)) {
+            user.equippedBadges = equippedBadges
+                .map(b => String(b || '').trim())
+                .filter(Boolean)
+                .slice(0, 10);
+        }
+        if (typeof dob === 'string' && dob.trim().length > 0) user.dob = dob.trim();
+        if (typeof gender === 'string' && (gender.trim() === 'Male' || gender.trim() === 'Female')) {
+            user.gender = gender.trim();
+        }
+        if (typeof country === 'string' && country.trim().length > 0) user.country = country.trim();
         user.updatedAt = new Date();
 
         await user.save();
