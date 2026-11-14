@@ -49,7 +49,8 @@ function broadcastGiftCatalogSync(payload = {}) {
         type: 'gift_catalog_sync',
         action: payload.action || 'sync',
         gift: payload.gift,
-        gifts: payload.gifts
+        gifts: payload.gifts,
+        categories: payload.categories
     });
     globalRoomWss.clients.forEach((client) => {
         if (client.readyState === WebSocket.OPEN) {
